@@ -89,19 +89,21 @@
 
   <section class="extra">
     <p class="badge reveal"><span data-i18n="extra.badge">Claude only</span></p>
-    <h2 class="reveal" data-i18n="extra.h2">Extra, built in.</h2>
-    <p class="lede reveal" data-i18n="extra.lede">Themes, fonts and more for Claude. Per profile.</p>
-    <div class="tabs reveal" role="tablist">
-      <button type="button" role="tab" aria-selected="true" data-shot="themes" data-i18n="extra.tab.themes">Themes</button>
-      <button type="button" role="tab" aria-selected="false" data-shot="community" data-i18n="extra.tab.community">Features</button>
+    <h2 class="reveal rotating">
+      <span class="sr-only" id="extra-heading-sr"></span>
+      <span aria-hidden="true"><span data-i18n="extra.h2.before">Apply any </span><span class="rotator" id="extra-rotator"><span class="word in" style="--tint:#8e6bdb">theme</span></span><span data-i18n="extra.h2.after"> to Claude.</span></span>
+    </h2>
+    <p class="lede reveal" data-i18n="extra.lede">Set it per profile.</p>
+    <div class="carousel reveal">
+      <div class="track" id="extra-track">
+        <img class="shot" src="shots/themes.webp" width="2000" height="1489" data-i18n-alt="a11y.shot.themes"
+             alt="Claude settings showing the Extra theme gallery.">
+        <img class="shot" src="shots/community.webp" width="2000" height="1489" data-i18n-alt="a11y.shot.community"
+             alt="Claude settings showing Extra features: fonts, diff view modes and panel tabs." loading="lazy">
+        <img class="shot" src="shots/themes.webp" width="2000" height="1489" alt="" aria-hidden="true" loading="lazy">
+      </div>
     </div>
-    <div class="swap reveal">
-      <img class="shot on" data-name="themes" src="shots/themes.webp" width="2000" height="1489" data-i18n-alt="a11y.shot.themes"
-           alt="Claude settings showing the Extra theme gallery.">
-      <img class="shot" data-name="community" src="shots/community.webp" width="2000" height="1489" data-i18n-alt="a11y.shot.community"
-           alt="Claude settings showing Extra features: fonts, diff view modes and panel tabs." loading="lazy">
-    </div>
-    <p class="credit"><span data-i18n="extra.credit">Powered by</span> <a href="https://github.com/patrickjaja/claude-desktop-extra" target="_blank" rel="noopener">claude-desktop-extra</a></p>
+    <p class="credit"><span data-i18n="extra.credit.before">Powered by</span> <a href="https://github.com/patrickjaja/claude-desktop-extra" target="_blank" rel="noopener">claude-desktop-extra</a> <span data-i18n="extra.credit.after"></span></p>
   </section>
 
 </main>
