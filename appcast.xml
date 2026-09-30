@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Barracks</title>
+    <link>https://raw.githubusercontent.com/ssut/Barracks/gh-pages/appcast.xml</link>
+    <description>Most recent updates to Barracks</description>
+    <language>en</language>
+    <item>
+      <title>0.1.0</title>
+      <pubDate>Wed, 30 Sep 2026 02:25:32 +0000</pubDate>
+      <sparkle:version>202609301124</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">- feat(site): rotate Extra heading with synced carousel and natural Korean/Japanese copy
+- feat(release): add Sparkle auto-update and notarized release pipeline
+- feat(site): add GitHub Pages landing page in English, Korean, and Japanese
+- feat(barracks): add built-in Extra, Claude Work migration, and UI refinements
+- feat(barracks): add multi-profile manager for Claude and ChatGPT desktop apps</description>
+      <sparkle:fullReleaseNotesLink>https://github.com/ssut/Barracks/releases</sparkle:fullReleaseNotesLink>
+      <enclosure url="https://github.com/ssut/Barracks/releases/download/v0.1.0/Barracks-0.1.0.dmg" length="3345975" type="application/octet-stream" sparkle:edSignature="auP5aM51lqwKRrQm/qLbuREYpouyC5QrNNdLkx5lKadp5JbRvq5Ad1aEFKoqfUYf2Nz270A4ckATkG21I3xtCQ==" />
+    </item>
+  </channel>
+</rss>
