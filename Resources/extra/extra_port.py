@@ -304,7 +304,9 @@ def bundle_mode(cache_root, out_dir):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(base, destination)
             os.chmod(destination, 0o755)
-            run(["codesign", "--force", "--sign", "-", str(destination)], capture_output=True)
+            identity = os.environ.get("BARRACKS_SIGN_IDENTITY", "-")
+            flags = [] if identity == "-" else ["--options", "runtime", "--timestamp"]
+            run(["codesign", "--force", "--sign", identity, *flags, str(destination)], capture_output=True)
             entries.append({
                 "name": pathlib.PurePosixPath(relative).name,
                 "binary": f"patches/{relative}",
@@ -319,6 +321,7 @@ def bundle_mode(cache_root, out_dir):
         (staging / "main-append.js").write_text(WINDOW_CONTROLS_HOOK + "\n" + FONTS_MAIN + "\n")
         manifest = {
             "format": BUNDLE_FORMAT,
+            "signedBy": "adhoc" if os.environ.get("BARRACKS_SIGN_IDENTITY", "-") == "-" else "developer-id",
             "upstream": UPSTREAM_URL,
             "commit": commit,
             "script": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),

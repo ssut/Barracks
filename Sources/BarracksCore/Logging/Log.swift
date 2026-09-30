@@ -31,7 +31,7 @@ public final class BarracksLogger: @unchecked Sendable {
     public static let shared = BarracksLogger()
 
     private let lock = NSLock()
-    private let osLogger = Logger(subsystem: "dev.barracks", category: "barracks")
+    private let osLogger = Logger(subsystem: "com.suhunhan.barracks", category: "barracks")
     private var fileURL: URL?
     private var mirrorToStderr = false
     private var minimumLevel: LogLevel = .info

@@ -10,6 +10,9 @@ let package = Package(
         .executable(name: "barracks", targets: ["BarracksCLI"]),
         .executable(name: "barracks-launcher", targets: ["BarracksLauncher"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.4"),
+    ],
     targets: [
         .target(
             name: "BarracksCore",
@@ -20,7 +23,11 @@ let package = Package(
                 .linkedFramework("Security"),
             ]
         ),
-        .executableTarget(name: "BarracksApp", dependencies: ["BarracksCore"]),
+        .executableTarget(
+            name: "BarracksApp",
+            dependencies: ["BarracksCore", .product(name: "Sparkle", package: "Sparkle")],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
+        ),
         .executableTarget(name: "BarracksCLI", dependencies: ["BarracksCore"]),
         .executableTarget(name: "BarracksLauncher"),
         .testTarget(name: "BarracksCoreTests", dependencies: ["BarracksCore"]),

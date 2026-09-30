@@ -11,7 +11,7 @@
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.barracks.app</string>
+    <string>com.suhunhan.barracks</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -30,9 +30,17 @@
     </array>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/ssut/Barracks/gh-pages/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>e9KK8/1rscK6JDOm7FKlmIadX4AXEL9/+lmUBFmtSaw=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>Personal utility. Not affiliated with Anthropic.</string>
+    <string>© 2026 Suhun Han. Not affiliated with Anthropic or OpenAI.</string>
 </dict>
 </plist>

@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = IconComposer.appImage(points: 256)
         }
         NSApp.activate()
+        ApplicationsMover.promptIfNeeded()
+        UpdateCoordinator.shared.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -36,6 +38,9 @@ struct BarracksApp: App {
         }
         .windowToolbarStyle(.unified)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { UpdateCoordinator.shared.checkForUpdates() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Profile…") { model.beginNewProfile() }
                     .keyboardShortcut("n")
