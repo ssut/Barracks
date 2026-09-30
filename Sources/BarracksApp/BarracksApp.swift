@@ -54,7 +54,7 @@ struct BarracksApp: App {
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(model.selectedRow == nil || model.isBusy)
                 Divider()
-                Button("Delete…") { model.deletingProfile = model.selectedRow?.profile }
+                Button("Delete…") { if let profile = model.selectedRow?.profile { model.requestDelete(profile) } }
                     .keyboardShortcut(.delete)
                     .disabled(model.selectedRow == nil || model.isBusy)
                 Divider()

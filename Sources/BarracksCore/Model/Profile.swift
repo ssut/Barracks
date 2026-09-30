@@ -79,6 +79,7 @@ public struct ProfileBuildRecord: Codable, Sendable, Hashable {
     public var builtAt: Date
     public var appAsarSHA256: String
     public var copyMethod: String
+    public var extraSignature: String? = nil
 }
 
 public struct Profile: Codable, Sendable, Identifiable, Hashable {
@@ -97,9 +98,14 @@ public struct Profile: Codable, Sendable, Identifiable, Hashable {
     public var appBundlePath: String?
     public var build: ProfileBuildRecord?
     public var computerUseMode: Bool? = nil
+    public var applyExtras: Bool? = nil
 
     public var usesComputerUseMode: Bool {
         provider.supportsComputerUseMode && computerUseMode == true
+    }
+
+    public var usesExtras: Bool {
+        provider == .claude && applyExtras != false
     }
 
     public var tint: ProfileTint {

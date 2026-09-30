@@ -15,6 +15,38 @@ struct ProfileRow: Identifiable, Equatable {
     var id: UUID { profile.id }
 }
 
+enum LegacyAction {
+    case restoreDefault
+    case importWork
+}
+
+struct QuitRequest {
+    var target: QuitTarget
+    var force: Bool
+}
+
+enum QuitTarget {
+    case profile(ProfileRow)
+    case official(OfficialRow)
+
+    var title: String {
+        switch self {
+        case .profile(let row): row.profile.displayName
+        case .official(let row): "\(row.provider.displayName) Default"
+        }
+    }
+
+    var profileID: UUID? {
+        if case .profile(let row) = self { return row.profile.id }
+        return nil
+    }
+
+    var officialProvider: AppProvider? {
+        if case .official(let row) = self { return row.provider }
+        return nil
+    }
+}
+
 struct OfficialRow: Equatable {
     var official: OfficialProfile
     var state: RuntimeState
@@ -38,11 +70,15 @@ final class AppModel {
     var lastActivity: [String: Date] = [:]
     var accounts: [String: AccountInfo] = [:]
     var unmanagedClones: [UnmanagedClone] = []
+    var extraStatus: ExtraPatchStatus = .ready
+    var legacy = LegacyClaudeWorkState()
     var showingNewProfile = false
     var newProfileProvider: AppProvider = .claude
     var newProfileProviderLocked = false
     var editingProfile: Profile?
     var deletingProfile: Profile?
+    var quitting: QuitRequest?
+    var legacyAction: LegacyAction?
     var verification: (title: String, bundle: VerificationReport, runtime: VerificationReport)?
 
     private var timer: Timer?
@@ -137,9 +173,13 @@ final class AppModel {
                 return (officials, errors, rows, manager.unmanagedClones(), loadError)
             }.value
             officials = loaded.0
+            IconCache.updateSources(loaded.0.mapValues { $0.official.installation.appURL })
             installationErrors = loaded.1
             rows = loaded.2.sorted { $0.profile.name.localizedStandardCompare($1.profile.name) == .orderedAscending }
             unmanagedClones = loaded.3
+            let extraInfo = await Task.detached(priority: .utility) { (manager.extraStatus(), manager.legacyState()) }.value
+            extraStatus = extraInfo.0
+            legacy = extraInfo.1
             if let loadError = loaded.4 { errorMessage = loadError }
             switch selection {
             case .profile(let id) where !rows.contains(where: { $0.id == id }):
@@ -224,15 +264,22 @@ final class AppModel {
         }
     }
 
-    func edit(_ profile: Profile, name: String, tint: ProfileTint, computerUseMode: Bool) {
+    func edit(_ profile: Profile, name: String, tint: ProfileTint, computerUseMode: Bool, applyExtras: Bool) {
         perform("Updating “\(profile.displayName)”") { manager, progress in
-            _ = try manager.editProfile(id: profile.id, name: name, tint: tint, computerUseMode: computerUseMode, progress: progress)
+            _ = try manager.editProfile(id: profile.id, name: name, tint: tint, computerUseMode: computerUseMode, applyExtras: applyExtras, progress: progress)
         }
     }
 
     func rebuild(_ profile: Profile) {
         perform("Rebuilding “\(profile.displayName)”") { manager, progress in
             _ = try manager.rebuild(id: profile.id, progress: progress)
+        }
+    }
+
+    func rebuildAndLaunch(_ row: ProfileRow) {
+        perform("Rebuilding “\(row.profile.displayName)”") { manager, progress in
+            _ = try manager.rebuild(id: row.profile.id, progress: progress)
+            try manager.launch(id: row.profile.id)
         }
     }
 
@@ -261,6 +308,78 @@ final class AppModel {
         }
         perform("Launching “\(row.profile.displayName)”") { manager, _ in
             try manager.launch(id: row.profile.id)
+        }
+    }
+
+    func requestQuit(_ target: QuitTarget, force: Bool = false) {
+        Task { @MainActor in
+            deletingProfile = nil
+            quitting = QuitRequest(target: target, force: force)
+        }
+    }
+
+    func requestDelete(_ profile: Profile) {
+        selection = .profile(profile.id)
+        Task { @MainActor in
+            quitting = nil
+            deletingProfile = profile
+        }
+    }
+
+    func confirmDelete(policy: DeleteDataPolicy) {
+        guard let profile = deletingProfile else { return }
+        deletingProfile = nil
+        Log.notice("app.delete_confirmed", ["profile": profile.id.uuidString, "policy": String(describing: policy)])
+        delete(profile, policy: policy)
+    }
+
+    func dismissConfirmations() {
+        quitting = nil
+        deletingProfile = nil
+        legacyAction = nil
+    }
+
+    func requestLegacy(_ action: LegacyAction) {
+        Task { @MainActor in
+            quitting = nil
+            deletingProfile = nil
+            legacyAction = action
+        }
+    }
+
+    func confirmLegacy() {
+        guard let action = legacyAction else { return }
+        legacyAction = nil
+        Log.notice("app.legacy_confirmed", ["action": String(describing: action)])
+        switch action {
+        case .restoreDefault:
+            guard let official = officials[.claude]?.official else { return }
+            perform("Restoring original Claude") { manager, _ in
+                if manager.officialState(official).isRunning {
+                    try manager.stopOfficial(official, force: false)
+                }
+                try manager.restoreDefaultClaude()
+                _ = try manager.launchOfficial(try manager.official(for: .claude))
+            }
+        case .importWork:
+            let workApp = legacy.workApp
+            perform("Importing Claude Work") { manager, progress in
+                if let workApp, LegacyClaudeWork.workAppRunning(workApp) {
+                    try ProfileRuntime.stop(appURL: workApp, bundleIdentifier: LegacyClaudeWork.workBundleIdentifier, name: "Claude Work", force: false)
+                }
+                let profile = try manager.importClaudeWork(progress: progress)
+                Task { @MainActor [weak self] in self?.selection = .profile(profile.id) }
+            }
+        }
+    }
+
+    func confirmQuit() {
+        guard let request = quitting else { return }
+        quitting = nil
+        Log.notice("app.quit_confirmed", ["target": request.target.title, "force": String(request.force)])
+        switch request.target {
+        case .profile(let row): stop(row, force: request.force)
+        case .official(let row): stopOfficial(row, force: request.force)
         }
     }
 

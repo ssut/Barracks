@@ -16,7 +16,7 @@ struct CLI {
                 let key = String(arg.dropFirst(2))
                 if let eq = key.firstIndex(of: "=") {
                     options[String(key[..<eq])] = String(key[key.index(after: eq)...])
-                } else if ["color", "adopt", "root", "name", "out", "provider", "computer-use"].contains(key), index + 1 < raw.count {
+                } else if ["color", "adopt", "root", "name", "out", "provider", "computer-use", "extras"].contains(key), index + 1 < raw.count {
                     options[key] = raw[index + 1]
                     index += 1
                 } else {
@@ -49,16 +49,17 @@ let usage = """
 usage: barracks <command> [options]
   detect                                 show the installed apps profiles are built from
   list                                   list profiles with status, version and account
-  create <name> [--provider claude|chatgpt] [--color c] [--adopt <dir>] [--share-tool-config] [--seed-tool-config] [--computer-use on]
+  create <name> [--provider claude|chatgpt] [--color c] [--adopt <dir>] [--share-tool-config] [--seed-tool-config] [--computer-use on] [--extras on|off]
   rebuild <profile> | --all
-  edit <profile> [--name n] [--color c] [--computer-use on|off]
+  edit <profile> [--name n] [--color c] [--computer-use on|off] [--extras on|off]
   launch <profile> | --official [--provider p]
   stop <profile> [--force] | --official [--provider p]
   delete <profile> [--delete-data]
   verify <profile>
   account <profile> | --official [--provider p]
   discover
-  icon <out.icns> [--barracks | --color c --name n --provider p] [--png]
+  migrate [status | restore-default | import-work [--name n] [--color c]]
+  icon <out.icns> [--barracks | --color c --name n --provider p [--generated]] [--png]
 global: --root <dir> keeps apps/data/logs under <dir> (for testing), --verbose
 colors: \(ProfileColor.allCases.map(\.rawValue).joined(separator: ", ")) or #RRGGBB
 """
@@ -139,7 +140,8 @@ func run() throws -> Int32 {
             adoptDataDirectory: cli.options["adopt"],
             isolateToolConfig: !cli.flags.contains("share-tool-config"),
             seedToolConfig: cli.flags.contains("seed-tool-config"),
-            computerUseMode: cli.options["computer-use"] == "on"
+            computerUseMode: cli.options["computer-use"] == "on",
+            applyExtras: cli.options["extras"] != "off"
         ), progress: progress)
         printLine("created \(profile.displayName) → \(profile.appBundlePath ?? "")")
     case "rebuild":
@@ -157,7 +159,7 @@ func run() throws -> Int32 {
         return failures == 0 ? 0 : 1
     case "edit":
         let profile = try manager.resolve(rest.first ?? "")
-        let updated = try manager.editProfile(id: profile.id, name: cli.options["name"], tint: try parseTint(cli.options["color"], default: nil), computerUseMode: cli.options["computer-use"].map { $0 == "on" }, progress: progress)
+        let updated = try manager.editProfile(id: profile.id, name: cli.options["name"], tint: try parseTint(cli.options["color"], default: nil), computerUseMode: cli.options["computer-use"].map { $0 == "on" }, applyExtras: cli.options["extras"].map { $0 == "on" }, progress: progress)
         printLine("updated \(updated.name)")
     case "launch":
         if cli.flags.contains("official") {
@@ -194,6 +196,24 @@ func run() throws -> Int32 {
             "plan": info.plan ?? "",
             "toolEmail": info.toolEmail ?? "",
         ])
+    case "migrate":
+        switch rest.first ?? "status" {
+        case "status":
+            let legacy = manager.legacyState()
+            printLine("default Claude patched by old script: \(legacy.defaultPatched ? "yes" : "no")\(legacy.defaultPatched ? (legacy.pristine == nil ? " (original backup missing)" : " (original backup available)") : "")")
+            printLine("Claude Work app: \(legacy.workApp?.path ?? "none")")
+            printLine("Claude Work data: \(legacy.workData?.path ?? "none")")
+            printLine("extra: \(manager.extraStatus().reason ?? "ready")")
+        case "restore-default":
+            try manager.restoreDefaultClaude()
+            printLine("restored the original Claude")
+        case "import-work":
+            let profile = try manager.importClaudeWork(name: cli.options["name"] ?? "Work", tint: try parseTint(cli.options["color"], default: .preset(.indigo)) ?? .preset(.indigo), progress: progress)
+            printLine("imported Claude Work as \(profile.displayName) → \(profile.appBundlePath ?? "")")
+        default:
+            printLine(usage)
+            return 64
+        }
     case "discover":
         for clone in manager.unmanagedClones() {
             printLine("unmanaged app: \(clone.displayName) — \(clone.appPath) — data \(clone.dataDirectory ?? "unknown")")
@@ -205,16 +225,20 @@ func run() throws -> Int32 {
     case "icon":
         guard let out = rest.first else { printLine(usage); return 64 }
         let url = URL(filePath: out)
+        func iconSource() throws -> URL? {
+            guard !cli.flags.contains("generated") else { return nil }
+            return try? manager.installation(for: try parseProvider(cli.options["provider"])).appURL
+        }
         if cli.flags.contains("png") {
             let image = cli.flags.contains("barracks")
                 ? IconComposer.renderAppIcon(size: 1024)
-                : IconComposer.renderProfileIcon(tint: try parseTint(cli.options["color"], default: .preset(.clay)) ?? .preset(.clay), name: cli.options["name"] ?? "P", provider: try parseProvider(cli.options["provider"]), size: 1024)
+                : IconComposer.renderProfileIcon(tint: try parseTint(cli.options["color"], default: .preset(.clay)) ?? .preset(.clay), name: cli.options["name"] ?? "P", provider: try parseProvider(cli.options["provider"]), sourceApp: try iconSource(), size: 1024)
             guard let image else { return 1 }
             try IconComposer.writePNG(image, to: url)
         } else if cli.flags.contains("barracks") {
             try IconComposer.writeAppIcns(to: url)
         } else {
-            try IconComposer.writeProfileIcns(tint: try parseTint(cli.options["color"], default: .preset(.clay)) ?? .preset(.clay), name: cli.options["name"] ?? "P", provider: try parseProvider(cli.options["provider"]), to: url)
+            try IconComposer.writeProfileIcns(tint: try parseTint(cli.options["color"], default: .preset(.clay)) ?? .preset(.clay), name: cli.options["name"] ?? "P", provider: try parseProvider(cli.options["provider"]), sourceApp: try iconSource(), to: url)
         }
         printLine("wrote \(url.path)")
     default:

@@ -11,10 +11,12 @@ public struct ProcessResult: Sendable {
 
 public enum ProcessRunner {
     @discardableResult
-    public static func run(_ executable: String, _ arguments: [String], allowFailure: Bool = false) throws -> ProcessResult {
+    public static func run(_ executable: String, _ arguments: [String], allowFailure: Bool = false, environment: [String: String]? = nil, currentDirectory: URL? = nil) throws -> ProcessResult {
         let process = Process()
         process.executableURL = URL(filePath: executable)
         process.arguments = arguments
+        if let environment { process.environment = environment }
+        if let currentDirectory { process.currentDirectoryURL = currentDirectory }
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe

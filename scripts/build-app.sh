@@ -31,6 +31,13 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp -f "$BIN_DIR/BarracksApp" "$APP/Contents/MacOS/Barracks"
 cp -f "$BIN_DIR/barracks" "$APP/Contents/Resources/barracks"
 cp -f "$BIN_DIR/barracks-launcher" "$APP/Contents/Resources/barracks-launcher"
+EXTRA_KEY=$(shasum -a 256 "$ROOT/Resources/extra/extra_port.py" | cut -c1-16)
+EXTRA_OUT="$ROOT/.build/extra-bundle/$EXTRA_KEY"
+if [[ ! -f "$EXTRA_OUT/manifest.json" ]]; then
+    python3 "$ROOT/Resources/extra/extra_port.py" bundle "$ROOT/.build/extra-src" "$EXTRA_OUT"
+fi
+rm -rf "$APP/Contents/Resources/Extra"
+cp -Rf "$EXTRA_OUT" "$APP/Contents/Resources/Extra"
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__BUILD__/$BUILD_NUMBER/g" "$ROOT/Resources/Info.plist" > "$APP/Contents/Info.plist"
 "$BIN_DIR/barracks" icon "$APP/Contents/Resources/AppIcon.icns" --barracks
 printf 'APPL????' > "$APP/Contents/PkgInfo"

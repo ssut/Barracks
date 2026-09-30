@@ -1,19 +1,24 @@
 import datetime
+import hashlib
+import json
 import os
 import pathlib
 import re
-import runpy
 import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 
-FONTS_MAIN = ';(function(){\nvar M="__cdbFonts";\nif(globalThis[M])return;\nif(typeof process==="undefined")return;\nvar electron=require("electron"),fs=require("fs"),path=require("path");\nvar DEFAULTS={ui:"Wanted Sans",code:"Monoplex KR Wide Nerd"};\nvar UI_TAIL=\'"Anthropic Sans",sans-serif\';\nvar CODE_TAIL=\'"Anthropic Mono",ui-monospace,SFMono-Regular,Menlo,monospace\';\nvar UI_SELECTORS=\'html,body,body :is(p,h1,h2,h3,h4,h5,h6,li,blockquote,td,th,label,button,input,textarea,select,option,[class~="font-sans"],[class~="font-serif"],[class*="font-claude-response"],[class*="font-user-message"])\';\nvar CODE_SELECTORS=\'body pre,body code,body kbd,body samp,body pre *,body code *,body kbd *,body samp *,body .monaco-editor,body .monaco-editor *,body .xterm,body .xterm *,body .cm-editor,body .cm-editor *,body [class*="font-mono"],body [class*="font-mono"] *\';\nvar inserted=new Map();\nvar state=null;\nfunction log(level,event,fields){try{var line="[Barracks Fonts] "+JSON.stringify(Object.assign({event:event},fields||{}));if(level==="warn")console.warn(line);else console.log(line)}catch(e){}}\nfunction strip(src){var out="",i=0,n=src.length,inStr=false,q="";while(i<n){var c=src[i],d=src[i+1];if(inStr){out+=c;if(c==="\\\\"){out+=d||"";i+=2;continue}if(c===q)inStr=false;i++;continue}if(c===\'"\'||c==="\'"){inStr=true;q=c;out+=c;i++;continue}if(c==="/"&&d==="/"){while(i<n&&src[i]!=="\\n")i++;continue}if(c==="/"&&d==="*"){i+=2;while(i<n&&!(src[i]==="*"&&src[i+1]==="/"))i++;i+=2;continue}out+=c;i++}return out.replace(/,(\\s*[}\\]])/g,"$1")}\nfunction paths(){var ud=electron.app.getPath("userData");return{json:path.join(ud,"claude-desktop-extra.json"),jsonc:path.join(ud,"claude-desktop-extra.jsonc")}}\nfunction readKey(file,key){var text;try{text=fs.readFileSync(file,"utf8")}catch(e){return undefined}try{var body=strip(text).trim();if(!body)return undefined;var o=JSON.parse(body);return o&&typeof o==="object"&&!Array.isArray(o)?o[key]:undefined}catch(e){log("warn","fonts.config_unreadable",{file:path.basename(file),error:e.message});return undefined}}\nfunction families(raw){var list=[];String(raw).split(",").forEach(function(part){var name=part.trim().replace(/^["\']+|["\']+$/g,"").trim();if(!name)return;if(name.length>64||!/^[\\p{L}\\p{N} ._+\\-]+$/u.test(name))throw new Error("unsupported font name: "+name);list.push(name)});if(list.length>8)throw new Error("at most 8 fonts per list");return list.join(", ")}\nfunction normalize(value){if(value===null||value===undefined)return{ui:DEFAULTS.ui,code:DEFAULTS.code};if(typeof value!=="object"||Array.isArray(value))throw new Error("fonts must be an object with ui and code");return{ui:value.ui===undefined?DEFAULTS.ui:families(value.ui),code:value.code===undefined?DEFAULTS.code:families(value.code)}}\nfunction quoted(list){return list.split(",").map(function(s){return s.trim()}).filter(Boolean).map(function(n){return\'"\'+n+\'"\'}).join(",")}\nfunction css(f){var out="";if(f.ui)out+=UI_SELECTORS+"{font-family:"+quoted(f.ui)+","+UI_TAIL+"!important}";if(f.code)out+=CODE_SELECTORS+"{font-family:"+quoted(f.code)+","+CODE_TAIL+"!important}";return out}\nfunction resolve(){var p=paths();var fromJson=readKey(p.json,"fonts");var fromJsonc=readKey(p.jsonc,"fonts");var source=fromJsonc!==undefined?fromJsonc:fromJson;var fonts;try{fonts=normalize(source)}catch(e){log("warn","fonts.config_invalid",{error:e.message});fonts=normalize(null)}return{fonts:fonts,lockedByJsonc:fromJsonc!==undefined,css:css(fonts)}}\nfunction eligible(wc){try{if(!wc||wc.isDestroyed())return false;var t=wc.getType();return t==="window"||t==="browserView"||t==="webview"}catch(e){return false}}\nfunction apply(wc){if(!eligible(wc))return;var id=wc.id;var old=inserted.get(id);inserted.delete(id);if(old){wc.removeInsertedCSS(old).catch(function(){})}var text=state?state.css:"";if(!text)return;wc.insertCSS(text,{cssOrigin:"author"}).then(function(key){if(wc.isDestroyed())return;inserted.set(id,key)}).catch(function(e){log("warn","fonts.insert_failed",{error:e&&e.message})})}\nfunction applyAll(){var count=0;electron.webContents.getAllWebContents().forEach(function(wc){if(eligible(wc)){apply(wc);count++}});return count}\nfunction read(){if(!state)state=resolve();return{ok:true,ui:state.fonts.ui,code:state.fonts.code,defaults:{ui:DEFAULTS.ui,code:DEFAULTS.code},lockedByJsonc:state.lockedByJsonc}}\nfunction set(value){if(!state)state=resolve();if(state.lockedByJsonc)return{ok:false,error:"fonts are set in claude-desktop-extra.jsonc - edit that file instead"};var fonts;try{fonts=normalize(value)}catch(e){return{ok:false,error:e.message}}state={fonts:fonts,lockedByJsonc:false,css:css(fonts)};var windows=applyAll();log("info","fonts.applied",{ui:fonts.ui,code:fonts.code,windows:windows});return{ok:true,fonts:fonts,windows:windows}}\nglobalThis[M]={read:read,set:set};\nelectron.app.on("web-contents-created",function(_event,wc){var id=wc.id;wc.on("dom-ready",function(){if(!state)state=resolve();apply(wc)});wc.once("destroyed",function(){inserted.delete(id)})});\nelectron.app.whenReady().then(function(){state=resolve();log("info","fonts.loaded",{ui:state.fonts.ui,code:state.fonts.code,locked:state.lockedByJsonc})}).catch(function(){});\n})();'
+FONTS_MAIN = ';(function(){\nvar M="__cdbFonts";\nif(globalThis[M])return;\nif(typeof process==="undefined")return;\nvar electron=require("electron"),fs=require("fs"),path=require("path");\nvar DEFAULTS={ui:"",code:""};\nvar UI_TAIL=\'"Anthropic Sans",sans-serif\';\nvar CODE_TAIL=\'"Anthropic Mono",ui-monospace,SFMono-Regular,Menlo,monospace\';\nvar UI_SELECTORS=\'html,body,body :is(p,h1,h2,h3,h4,h5,h6,li,blockquote,td,th,label,button,input,textarea,select,option,[class~="font-sans"],[class~="font-serif"],[class*="font-claude-response"],[class*="font-user-message"])\';\nvar CODE_SELECTORS=\'body pre,body code,body kbd,body samp,body pre *,body code *,body kbd *,body samp *,body .monaco-editor,body .monaco-editor *,body .xterm,body .xterm *,body .cm-editor,body .cm-editor *,body [class*="font-mono"],body [class*="font-mono"] *\';\nvar inserted=new Map();\nvar state=null;\nfunction log(level,event,fields){try{var line="[Barracks Fonts] "+JSON.stringify(Object.assign({event:event},fields||{}));if(level==="warn")console.warn(line);else console.log(line)}catch(e){}}\nfunction strip(src){var out="",i=0,n=src.length,inStr=false,q="";while(i<n){var c=src[i],d=src[i+1];if(inStr){out+=c;if(c==="\\\\"){out+=d||"";i+=2;continue}if(c===q)inStr=false;i++;continue}if(c===\'"\'||c==="\'"){inStr=true;q=c;out+=c;i++;continue}if(c==="/"&&d==="/"){while(i<n&&src[i]!=="\\n")i++;continue}if(c==="/"&&d==="*"){i+=2;while(i<n&&!(src[i]==="*"&&src[i+1]==="/"))i++;i+=2;continue}out+=c;i++}return out.replace(/,(\\s*[}\\]])/g,"$1")}\nfunction paths(){var ud=electron.app.getPath("userData");return{json:path.join(ud,"claude-desktop-extra.json"),jsonc:path.join(ud,"claude-desktop-extra.jsonc")}}\nfunction readKey(file,key){var text;try{text=fs.readFileSync(file,"utf8")}catch(e){return undefined}try{var body=strip(text).trim();if(!body)return undefined;var o=JSON.parse(body);return o&&typeof o==="object"&&!Array.isArray(o)?o[key]:undefined}catch(e){log("warn","fonts.config_unreadable",{file:path.basename(file),error:e.message});return undefined}}\nfunction families(raw){var list=[];String(raw).split(",").forEach(function(part){var name=part.trim().replace(/^["\']+|["\']+$/g,"").trim();if(!name)return;if(name.length>64||!/^[\\p{L}\\p{N} ._+\\-]+$/u.test(name))throw new Error("unsupported font name: "+name);list.push(name)});if(list.length>8)throw new Error("at most 8 fonts per list");return list.join(", ")}\nfunction normalize(value){if(value===null||value===undefined)return{ui:DEFAULTS.ui,code:DEFAULTS.code};if(typeof value!=="object"||Array.isArray(value))throw new Error("fonts must be an object with ui and code");return{ui:value.ui===undefined?DEFAULTS.ui:families(value.ui),code:value.code===undefined?DEFAULTS.code:families(value.code)}}\nfunction quoted(list){return list.split(",").map(function(s){return s.trim()}).filter(Boolean).map(function(n){return\'"\'+n+\'"\'}).join(",")}\nfunction css(f){var out="";if(f.ui)out+=UI_SELECTORS+"{font-family:"+quoted(f.ui)+","+UI_TAIL+"!important}";if(f.code)out+=CODE_SELECTORS+"{font-family:"+quoted(f.code)+","+CODE_TAIL+"!important}";return out}\nfunction resolve(){var p=paths();var fromJson=readKey(p.json,"fonts");var fromJsonc=readKey(p.jsonc,"fonts");var source=fromJsonc!==undefined?fromJsonc:fromJson;var fonts;try{fonts=normalize(source)}catch(e){log("warn","fonts.config_invalid",{error:e.message});fonts=normalize(null)}return{fonts:fonts,lockedByJsonc:fromJsonc!==undefined,css:css(fonts)}}\nfunction eligible(wc){try{if(!wc||wc.isDestroyed())return false;var t=wc.getType();return t==="window"||t==="browserView"||t==="webview"}catch(e){return false}}\nfunction apply(wc){if(!eligible(wc))return;var id=wc.id;var old=inserted.get(id);inserted.delete(id);if(old){wc.removeInsertedCSS(old).catch(function(){})}var text=state?state.css:"";if(!text)return;wc.insertCSS(text,{cssOrigin:"author"}).then(function(key){if(wc.isDestroyed())return;inserted.set(id,key)}).catch(function(e){log("warn","fonts.insert_failed",{error:e&&e.message})})}\nfunction applyAll(){var count=0;electron.webContents.getAllWebContents().forEach(function(wc){if(eligible(wc)){apply(wc);count++}});return count}\nfunction read(){if(!state)state=resolve();return{ok:true,ui:state.fonts.ui,code:state.fonts.code,defaults:{ui:DEFAULTS.ui,code:DEFAULTS.code},lockedByJsonc:state.lockedByJsonc}}\nfunction set(value){if(!state)state=resolve();if(state.lockedByJsonc)return{ok:false,error:"fonts are set in claude-desktop-extra.jsonc - edit that file instead"};var fonts;try{fonts=normalize(value)}catch(e){return{ok:false,error:e.message}}state={fonts:fonts,lockedByJsonc:false,css:css(fonts)};var windows=applyAll();log("info","fonts.applied",{ui:fonts.ui,code:fonts.code,windows:windows});return{ok:true,fonts:fonts,windows:windows}}\nglobalThis[M]={read:read,set:set};\nelectron.app.on("web-contents-created",function(_event,wc){var id=wc.id;wc.on("dom-ready",function(){if(!state)state=resolve();apply(wc)});wc.once("destroyed",function(){inserted.delete(id)})});\nelectron.app.whenReady().then(function(){state=resolve();log("info","fonts.loaded",{ui:state.fonts.ui,code:state.fonts.code,locked:state.lockedByJsonc})}).catch(function(){});\n})();'
 FONTS_HANDLERS = '    "cdb-fonts:read": function () {\n      var f = globalThis.__cdbFonts;\n      if (!f) return { ok: false, error: "the fonts patch is not installed in this build" };\n      return f.read();\n    },\n\n    "cdb-fonts:set": function (ui, code) {\n      var f = globalThis.__cdbFonts;\n      if (!f) return { ok: false, error: "the fonts patch is not installed in this build" };\n      var value = ui === null && code === null ? null : { ui: String(ui == null ? "" : ui), code: String(code == null ? "" : code) };\n      var live = f.set(value);\n      if (!live || live.ok !== true) return live || { ok: false, error: "could not apply the fonts" };\n      var res = __cdbEx_writeCfg(function (cfg) {\n        if (value === null) delete cfg.fonts;\n        else cfg.fonts = { ui: live.fonts.ui, code: live.fonts.code };\n        return true;\n      });\n      if (!res.ok) return { ok: false, error: "applied to " + live.windows + " window(s) but could not save: " + res.error };\n      return { ok: true, ui: live.fonts.ui, code: live.fonts.code, windows: live.windows, path: res.path };\n    },\n\n'
 FONTS_BRIDGE = '    fontsRead: function () {\n      return ipcRenderer.invoke("cdb-fonts:read");\n    },\n    fontsSet: function (ui, code) {\n      return ipcRenderer.invoke("cdb-fonts:set", ui === null ? null : String(ui || ""), code === null ? null : String(code || ""));\n    },\n'
 FONTS_ROW = '  function renderFontsRow(panel) {\n    if (!api || typeof api.fontsRead !== "function" || typeof api.fontsSet !== "function") return;\n    var spec = { section: "Typography", title: "Fonts", note: "UI and code fonts. Comma-separated fallbacks. Empty keeps Claude\'s font. Applies live." };\n\n    var head = el("div", "cdbx-sec-h");\n    head.appendChild(el("span", "cdbx-sec-t", spec.section));\n    panel.appendChild(head);\n\n    var host = el("div", "cdbx-list");\n    var node = el("div", "cdbx-row");\n    var main = el("div", "cdbx-row-main");\n    main.appendChild(el("div", "cdbx-id", spec.title));\n    main.appendChild(el("div", "cdbx-note", spec.note));\n\n    function field(label) {\n      var wrap = el("div", "cdbx-state");\n      wrap.style.display = "flex";\n      wrap.style.alignItems = "center";\n      wrap.style.gap = "8px";\n      var caption = el("span", null, label);\n      caption.style.minWidth = "36px";\n      var input = el("input", "cdbx-input");\n      input.type = "text";\n      input.spellcheck = false;\n      input.autocomplete = "off";\n      input.style.flex = "1 1 auto";\n      input.style.maxWidth = "320px";\n      input.setAttribute("aria-label", label + " font");\n      input.disabled = true;\n      wrap.appendChild(caption);\n      wrap.appendChild(input);\n      main.appendChild(wrap);\n      return input;\n    }\n\n    var uiInput = field("UI");\n    var codeInput = field("Code");\n    var stateLine = el("div", "cdbx-state", "Loading...");\n    main.appendChild(stateLine);\n    node.appendChild(main);\n\n    var aside = el("div", "cdbx-row-aside");\n    var applyBtn = el("button", "cdbx-btn", "Apply");\n    applyBtn.type = "button";\n    applyBtn.disabled = true;\n    var resetBtn = el("button", "cdbx-btn", "Reset");\n    resetBtn.type = "button";\n    resetBtn.disabled = true;\n    aside.appendChild(applyBtn);\n    aside.appendChild(resetBtn);\n    node.appendChild(aside);\n    host.appendChild(node);\n    panel.appendChild(host);\n\n    var defaults = { ui: "", code: "" };\n\n    function describe(ui, code) {\n      return "UI: " + (ui || "Claude default") + " - Code: " + (code || "Claude default");\n    }\n\n    function show(res) {\n      uiInput.value = res.ui || "";\n      codeInput.value = res.code || "";\n      uiInput.placeholder = defaults.ui || "Claude default";\n      codeInput.placeholder = defaults.code || "Claude default";\n      stateLine.textContent = describe(res.ui, res.code);\n    }\n\n    function busy(on) {\n      uiInput.disabled = on;\n      codeInput.disabled = on;\n      applyBtn.disabled = on;\n      resetBtn.disabled = on;\n    }\n\n    function submit(ui, code) {\n      busy(true);\n      api.fontsSet(ui, code).then(function (r) {\n        busy(false);\n        if (failed(r)) { toast("Could not change the fonts: " + reason(r), true); return; }\n        show(r);\n        node.classList.add("cdbx-flash");\n        setTimeout(function () { node.classList.remove("cdbx-flash"); }, 700);\n        toast("Fonts applied in " + r.windows + " window(s)");\n      }, function (err) {\n        busy(false);\n        toast("Could not change the fonts: " + (err && err.message ? err.message : String(err)), true);\n      });\n    }\n\n    api.fontsRead().then(function (res) {\n      if (failed(res)) {\n        stateLine.textContent = "Unavailable: " + reason(res);\n        return;\n      }\n      defaults = res.defaults || defaults;\n      show(res);\n      if (res.lockedByJsonc) {\n        stateLine.textContent = describe(res.ui, res.code) + " - set in claude-desktop-extra.jsonc";\n        return;\n      }\n      busy(false);\n      applyBtn.addEventListener("click", function () { submit(uiInput.value, codeInput.value); });\n      resetBtn.addEventListener("click", function () { submit(null, null); });\n      [uiInput, codeInput].forEach(function (input) {\n        input.addEventListener("keydown", function (ev) {\n          if (ev.key === "Enter") { ev.preventDefault(); submit(uiInput.value, codeInput.value); }\n        });\n      });\n    }, function (err) {\n      stateLine.textContent = "Unavailable: " + (err && err.message ? err.message : String(err));\n    });\n\n    return { head: head, host: host, spec: spec };\n  }\n\n'
 
 UPSTREAM_URL = "https://github.com/patrickjaja/claude-desktop-extra.git"
+WINDOW_CONTROLS_HOOK = ';(function(){var m="__cdbClaudeWorkMacWindowControls";if(globalThis[m])return;globalThis[m]=true;if(process.platform!=="darwin")return;try{var e=require("electron");e.app.on("browser-window-created",function(_event,w){try{w.webContents.once("did-finish-load",function(){try{if(w.webContents.getURL().indexOf("cdb-theme-picker")>=0)return;if(globalThis.__cdbNoWinCtl&&globalThis.__cdbNoWinCtl()&&typeof w.setWindowButtonVisibility==="function")w.setWindowButtonVisibility(false)}catch(x){console.warn("[Claude Work Extras] Window-control hook failed",x)}})}catch(x){console.warn("[Claude Work Extras] Window-control hook registration failed",x)}})}catch(x){console.warn("[Claude Work Extras] Window-control hook initialization failed",x)}})();'
+DEPLOYMENT_TARGET = "14.0"
+PINNED_COMMIT = "d5551098ceb87bf4effe8165f02e405a813a49ea"
 PATCHES = [
     "core/add_feature_custom_themes",
     "core/add_feature_extra_settings",
@@ -55,24 +60,27 @@ def sync_repository(support_root):
         ).strip()
         if remote != UPSTREAM_URL:
             raise RuntimeError(f"Unexpected upstream remote: {remote}")
-        fetched = subprocess.run(
-            ["git", "-C", str(repository), "fetch", "--quiet", "--depth=1", "origin", "master"],
-            text=True,
-            capture_output=True,
-        )
-        if fetched.returncode == 0:
-            run(["git", "-C", str(repository), "reset", "--hard", "FETCH_HEAD"], capture_output=True)
-            log("INFO", "Updated claude-desktop-extra from origin/master.")
-        else:
-            log("WARN", "Could not fetch the feature source; using its last local commit.")
     else:
-        run(["git", "clone", "--quiet", "--depth=1", "--branch", "master", UPSTREAM_URL, str(repository)])
-        log("INFO", "Cloned claude-desktop-extra master.")
+        run(["git", "init", "--quiet", str(repository)])
+        run(["git", "-C", str(repository), "remote", "add", "origin", UPSTREAM_URL])
+        log("INFO", "Initialized claude-desktop-extra source directory.")
+    present = subprocess.run(
+        ["git", "-C", str(repository), "cat-file", "-e", f"{PINNED_COMMIT}^{{commit}}"],
+        capture_output=True,
+    ).returncode == 0
+    if not present:
+        run(["git", "-C", str(repository), "fetch", "--quiet", "--depth=1", "origin", PINNED_COMMIT], capture_output=True)
+        log("INFO", f"Fetched pinned claude-desktop-extra commit {PINNED_COMMIT[:12]}.")
+    run(["git", "-C", str(repository), "checkout", "--quiet", "--force", "--detach", PINNED_COMMIT], capture_output=True)
+    run(["git", "-C", str(repository), "clean", "-fdxq"], capture_output=True)
     commit = subprocess.check_output(
         ["git", "-C", str(repository), "rev-parse", "HEAD"],
         text=True,
     ).strip()
-    print(commit)
+    if commit != PINNED_COMMIT:
+        raise RuntimeError(f"claude-desktop-extra is at {commit}, expected pinned {PINNED_COMMIT}")
+    log("INFO", f"Using pinned claude-desktop-extra {PINNED_COMMIT[:12]}.")
+    return commit
 
 
 def replace_text(path, old, new, expected=None):
@@ -172,7 +180,7 @@ def adapt_sources(source):
     replace_regex(
         settings,
         r'      note: "Opens the main window with no frame.*?Desktop\.",\n      ariaLabel: "open the main window frameless, without window-control buttons or a shadow",',
-        '      note: "Hides the three macOS traffic-light buttons. The standard macOS frame and shadow stay in place. " +\n        "Restart Claude Work to apply the setting.",\n      ariaLabel: "hide the macOS window controls",',
+        '      note: "Hides the three macOS traffic-light buttons. The standard macOS frame and shadow stay in place. " +\n        "Restart the app to apply the setting.",\n      ariaLabel: "hide the macOS window controls",',
     )
     replace_text(
         settings,
@@ -183,13 +191,13 @@ def adapt_sources(source):
     replace_text(
         settings,
         '"Window controls hidden - restart Claude Desktop to open the window frameless"',
-        '"Window controls hidden - restart Claude Work"',
+        '"Window controls hidden - restart the app"',
         1,
     )
     replace_text(
         settings,
         '"Window controls back - restart Claude Desktop to get the titlebar back"',
-        '"Window controls back - restart Claude Work"',
+        '"Window controls back - restart the app"',
         1,
     )
     replace_text(
@@ -229,68 +237,116 @@ def compile_patches(source):
         ["make", "-C", str(source / "patches"), "-j4", *targets],
         text=True,
         capture_output=True,
-        env={**os.environ, "SDKROOT": sdk},
+        env={**os.environ, "SDKROOT": sdk, "MACOSX_DEPLOYMENT_TARGET": DEPLOYMENT_TARGET},
     )
     if build.returncode != 0:
         raise RuntimeError("Nim patch build failed:\n" + build.stdout + build.stderr)
     log("INFO", f"Compiled {len(PATCHES)} feature patchers for macOS.")
 
 
-def apply_patches(source, app_contents, workspace):
-    patchset = pathlib.Path(workspace) / "port-patches"
-    (patchset / "linux").mkdir(parents=True, exist_ok=True)
-    for relative in PATCHES:
-        relative_path = pathlib.Path(relative)
-        destination = patchset / relative_path.parent
-        destination.mkdir(parents=True, exist_ok=True)
-        base = source / "patches" / relative_path
-        shutil.copy2(base.with_suffix(".nim"), destination / base.with_suffix(".nim").name)
-        shutil.copy2(base, destination / base.name)
-    script = source / "scripts/apply_patches.py"
-    namespace = runpy.run_path(str(script), run_name="claude_work_patch_runner")
-    namespace["main"].__globals__["EXPECTED_PATCH_COUNT"] = len(PATCHES)
-    sys.argv = [str(script), str(patchset), str(pathlib.Path(app_contents).parent)]
-    namespace["main"]()
-    main_bundle = pathlib.Path(app_contents) / ".vite/build/index.js"
-    text = main_bundle.read_text()
-    if 'require("./index.chunk-' not in text or "__cdbClaudeWorkMacWindowControls" in text:
-        raise RuntimeError("Claude's main loader changed or already contains the macOS window-control hook.")
-    hook = ';(function(){var m="__cdbClaudeWorkMacWindowControls";if(globalThis[m])return;globalThis[m]=true;if(process.platform!=="darwin")return;try{var e=require("electron");e.app.on("browser-window-created",function(_event,w){try{w.webContents.once("did-finish-load",function(){try{if(w.webContents.getURL().indexOf("cdb-theme-picker")>=0)return;if(globalThis.__cdbNoWinCtl&&globalThis.__cdbNoWinCtl()&&typeof w.setWindowButtonVisibility==="function")w.setWindowButtonVisibility(false)}catch(x){console.warn("[Claude Work Extras] Window-control hook failed",x)}})}catch(x){console.warn("[Claude Work Extras] Window-control hook registration failed",x)}})}catch(x){console.warn("[Claude Work Extras] Window-control hook initialization failed",x)}})();'
-    if 'var M="__cdbFonts"' in text:
-        raise RuntimeError("Claude's main loader already contains the fonts module.")
-    main_bundle.write_text(text + hook + "\n" + FONTS_MAIN + "\n")
-    log("INFO", "Added the macOS window-control behavior to the standard feature setting.")
-    log("INFO", "Added the configurable UI and code font setting to Extra.")
+HEADER_RE = re.compile(r"@patch-(target|type):\s*(\S+)")
+BUNDLE_FORMAT = 1
 
 
-def apply_mode(repository, app_contents, workspace):
-    repository = pathlib.Path(repository).expanduser()
-    workspace = pathlib.Path(workspace).expanduser()
+def extract_source(repository, workspace):
     archive = workspace / "claude-desktop-extra.tar"
     source = workspace / "claude-desktop-extra-macos"
     with archive.open("wb") as target:
         run(["git", "-C", str(repository), "archive", "--format=tar", "HEAD"], stdout=target)
     source.mkdir()
     with tarfile.open(archive) as contents:
-        contents.extractall(source, filter="data")
-    commit = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
-    adapt_sources(source)
-    compile_patches(source)
-    apply_patches(source, app_contents, workspace)
-    log("INFO", f"Applied macOS-compatible extras from upstream {commit}.")
+        if hasattr(tarfile, "data_filter"):
+            contents.extractall(source, filter="data")
+        else:
+            root = source.resolve()
+            for member in contents.getmembers():
+                target = (source / member.name).resolve()
+                if not (member.isfile() or member.isdir()) or not str(target).startswith(str(root)):
+                    raise RuntimeError(f"Refusing unsafe archive entry: {member.name}")
+            contents.extractall(source)
+    return source
+
+
+def patch_headers(path):
+    target = kind = None
+    for key, value in HEADER_RE.findall(path.read_text(errors="ignore")):
+        if key == "target" and target is None:
+            target = value
+        elif key == "type" and kind is None:
+            kind = value
+    if not target or not kind:
+        raise RuntimeError(f"Patch {path.name} has no @patch-target/@patch-type header")
+    if kind != "nim":
+        raise RuntimeError(f"Patch {path.name} has unsupported type {kind}")
+    if not target.startswith("app.asar.contents/"):
+        raise RuntimeError(f"Patch {path.name} targets {target} outside app.asar.contents")
+    return target
+
+
+def bundle_mode(cache_root, out_dir):
+    cache_root = pathlib.Path(cache_root).expanduser()
+    out_dir = pathlib.Path(out_dir).expanduser()
+    commit = sync_repository(cache_root)
+    workspace = pathlib.Path(tempfile.mkdtemp(prefix="barracks-extra-"))
+    staging = out_dir.parent / f".{out_dir.name}.staging"
+    try:
+        source = extract_source(cache_root / "claude-desktop-extra", workspace)
+        adapt_sources(source)
+        compile_patches(source)
+        if staging.exists():
+            shutil.rmtree(staging)
+        (staging / "patches").mkdir(parents=True)
+        entries = []
+        for relative in sorted(PATCHES, key=lambda item: pathlib.PurePosixPath(item).name):
+            base = source / "patches" / relative
+            target = patch_headers(base.with_suffix(".nim"))
+            destination = staging / "patches" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(base, destination)
+            os.chmod(destination, 0o755)
+            run(["codesign", "--force", "--sign", "-", str(destination)], capture_output=True)
+            entries.append({
+                "name": pathlib.PurePosixPath(relative).name,
+                "binary": f"patches/{relative}",
+                "target": target[len("app.asar.contents/"):],
+                "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+            })
+        for entry in entries:
+            build = subprocess.check_output(["vtool", "-show-build", str(staging / entry["binary"])], text=True)
+            found = re.search(r"minos (\S+)", build)
+            if not found or tuple(int(x) for x in found.group(1).split(".")) > tuple(int(x) for x in DEPLOYMENT_TARGET.split(".")):
+                raise RuntimeError(f"{entry['name']} targets macOS {found.group(1) if found else 'unknown'}, expected {DEPLOYMENT_TARGET}")
+        (staging / "main-append.js").write_text(WINDOW_CONTROLS_HOOK + "\n" + FONTS_MAIN + "\n")
+        manifest = {
+            "format": BUNDLE_FORMAT,
+            "upstream": UPSTREAM_URL,
+            "commit": commit,
+            "script": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+            "patches": entries,
+            "mainTarget": ".vite/build/index.js",
+            "mainAppend": "main-append.js",
+            "mainAppendSHA256": hashlib.sha256((staging / "main-append.js").read_bytes()).hexdigest(),
+            "staleMarkers": ["__cdb", "__nav_spoof_applied"],
+        }
+        (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        staging.rename(out_dir)
+        log("INFO", f"Wrote Extra bundle for {commit[:12]} with {len(entries)} patches to {out_dir}.")
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit("Usage: claude_work_extra_port.py sync|apply ...")
-    mode = sys.argv[1]
-    if mode == "sync" and len(sys.argv) == 3:
-        sync_repository(sys.argv[2])
+    if len(sys.argv) == 3 and sys.argv[1] == "sync":
+        print(sync_repository(sys.argv[2]))
         return
-    if mode == "apply" and len(sys.argv) == 5:
-        apply_mode(sys.argv[2], sys.argv[3], sys.argv[4])
+    if len(sys.argv) == 4 and sys.argv[1] == "bundle":
+        bundle_mode(sys.argv[2], sys.argv[3])
         return
-    raise SystemExit("Usage: claude_work_extra_port.py sync <support-root> | apply <repo> <app-asar-contents> <workspace>")
+    raise SystemExit("Usage: extra_port.py sync <cache-root> | bundle <cache-root> <out-dir>")
 
 
 if __name__ == "__main__":

@@ -25,17 +25,6 @@ struct ContentView: View {
             Divider()
             FooterView()
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.beginNewProfile()
-                } label: {
-                    Label("New Profile", systemImage: "plus")
-                }
-                .help("New profile (⌘N)")
-                .disabled(model.isBusy || model.installedProviders.isEmpty)
-            }
-        }
         .overlay {
             if let message = model.busyMessage {
                 BusyOverlay(message: message)
@@ -46,16 +35,6 @@ struct ContentView: View {
         }
         .sheet(item: $model.editingProfile) { profile in
             EditProfileSheet(profile: profile)
-        }
-        .confirmationDialog(
-            "Delete “\(model.deletingProfile?.name ?? "")”?",
-            isPresented: Binding(get: { model.deletingProfile != nil }, set: { if !$0 { model.deletingProfile = nil } }),
-            titleVisibility: .visible,
-            presenting: model.deletingProfile
-        ) { profile in
-            Button("Delete App, Keep Data") { model.delete(profile, policy: .keepData) }
-            Button("Delete App and Data", role: .destructive) { model.delete(profile, policy: .moveDataToTrash) }
-            Button("Cancel", role: .cancel) {}
         }
         .alert("Error", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
@@ -98,8 +77,8 @@ struct FooterView: View {
             ForEach(AppProvider.allCases) { provider in
                 if let installation = model.officials[provider]?.official.installation {
                     HStack(spacing: 5) {
-                        Image(systemName: installation.isOfficiallySigned ? "checkmark.seal" : "exclamationmark.triangle")
-                            .foregroundStyle(installation.isOfficiallySigned ? Color.green : Color.orange)
+                        ProviderGlyph(provider: provider, size: 12)
+                            .foregroundStyle(.secondary)
                         Text("\(provider.displayName) \(installation.version)")
                             .monospacedDigit()
                     }

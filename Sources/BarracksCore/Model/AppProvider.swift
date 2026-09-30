@@ -126,6 +126,13 @@ public enum AppProvider: String, Codable, CaseIterable, Sendable, Hashable, Iden
 
     public static let launchWrapperName = "barracks-launch"
 
+    public var renamesBundleName: Bool {
+        switch self {
+        case .claude: false
+        case .chatgpt: true
+        }
+    }
+
     public var supportsComputerUseMode: Bool {
         switch self {
         case .claude: false

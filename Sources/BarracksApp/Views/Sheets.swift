@@ -49,6 +49,49 @@ struct ColorPickerRow: View {
 enum DataChoice: Hashable {
     case fresh
     case adopt(String)
+    case choose
+}
+
+extension ExtraPatchStatus {
+    func canToggle(from isOn: Bool) -> Bool {
+        isAvailable || isOn
+    }
+}
+
+struct ExtraToggle: View {
+    @Binding var isOn: Bool
+    var status: ExtraPatchStatus
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            HStack(spacing: 6) {
+                Text("Apply Extra plugins")
+                InfoButton {
+                    ExtraInfo(status: status)
+                }
+            }
+        }
+        .disabled(!status.canToggle(from: isOn))
+    }
+}
+
+struct ExtraInfo: View {
+    var status: ExtraPatchStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Apply Extra plugins")
+                .font(.headline)
+            Text("Adds claude-desktop-extra features (themes, panels, fonts and more) to this profile. The Default Claude stays untouched.")
+                .fixedSize(horizontal: false, vertical: true)
+            if let reason = status.reason {
+                Label(reason, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.callout)
+    }
 }
 
 struct NewProfileSheet: View {
@@ -58,7 +101,7 @@ struct NewProfileSheet: View {
     @State private var name = ""
     @State private var tint: ProfileTint = .preset(.clay)
     @State private var dataChoice: DataChoice = .fresh
-    @State private var isolateToolConfig = true
+    @State private var applyExtras = true
     @State private var seedToolConfig = true
     @State private var computerUseMode = false
     @State private var candidates: [AdoptableDataDirectory] = []
@@ -113,18 +156,25 @@ struct NewProfileSheet: View {
                         if let customFolder, !candidates.contains(where: { $0.path == customFolder }) {
                             Text("\(customFolder.replacingOccurrences(of: NSHomeDirectory(), with: "~"))").tag(DataChoice.adopt(customFolder))
                         }
+                        Divider()
+                        Text("Choose Folder…").tag(DataChoice.choose)
                     }
-                    Button("Choose Folder…") { chooseFolder() }
-                        .buttonStyle(.link)
                     if !adoptedUsers.isEmpty {
                         Label("Also used by \(adoptedUsers.joined(separator: ", "))", systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
-                    Toggle("Separate Claude Code config", isOn: $isolateToolConfig)
+                    ExtraToggle(isOn: $applyExtras, status: model.extraStatus)
                 } else {
                     Toggle("Copy Codex settings", isOn: $seedToolConfig)
-                    Toggle("Computer Use mode", isOn: $computerUseMode)
+                    Toggle(isOn: $computerUseMode) {
+                        HStack(spacing: 6) {
+                            Text("Computer Use mode")
+                            InfoButton {
+                                ComputerUseModeInfo()
+                            }
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -138,9 +188,10 @@ struct NewProfileSheet: View {
                         name: name,
                         tint: tint,
                         adoptDataDirectory: provider == .claude ? adoptedPath : nil,
-                        isolateToolConfig: provider == .claude ? isolateToolConfig : true,
+                        isolateToolConfig: true,
                         seedToolConfig: provider == .chatgpt && seedToolConfig,
-                        computerUseMode: provider.supportsComputerUseMode && computerUseMode
+                        computerUseMode: provider.supportsComputerUseMode && computerUseMode,
+                        applyExtras: provider == .claude && applyExtras
                     ))
                     dismiss()
                 }
@@ -155,10 +206,16 @@ struct NewProfileSheet: View {
             let manager = model.manager
             candidates = await Task.detached { manager.adoptableDataDirectories() }.value
             provider = model.newProfileProvider
+            applyExtras = model.extraStatus.isAvailable
             let used = Set(model.rows.map { $0.profile.tint })
             tint = ProfileColor.allCases.map { ProfileTint.preset($0) }.first { !used.contains($0) } ?? .preset(.clay)
         }
-        .onChange(of: dataChoice) { _, choice in
+        .onChange(of: dataChoice) { previous, choice in
+            if choice == .choose {
+                dataChoice = previous
+                DispatchQueue.main.async { chooseFolder() }
+                return
+            }
             guard name.isEmpty, case .adopt(let path) = choice else { return }
             if let suggestion = candidates.first(where: { $0.path == path })?.suggestedName {
                 name = suggestion
@@ -188,12 +245,14 @@ struct EditProfileSheet: View {
     @State private var name: String
     @State private var tint: ProfileTint
     @State private var computerUseMode: Bool
+    @State private var applyExtras: Bool
 
     init(profile: Profile) {
         self.profile = profile
         _name = State(initialValue: profile.name)
         _tint = State(initialValue: profile.tint)
         _computerUseMode = State(initialValue: profile.usesComputerUseMode)
+        _applyExtras = State(initialValue: profile.usesExtras)
     }
 
     var running: Bool {
@@ -225,7 +284,17 @@ struct EditProfileSheet: View {
                 }
                 LabeledContent("Color") { ColorPickerRow(selection: $tint, name: name, provider: profile.provider) }
                 if profile.provider.supportsComputerUseMode {
-                    Toggle("Computer Use mode", isOn: $computerUseMode)
+                    Toggle(isOn: $computerUseMode) {
+                        HStack(spacing: 6) {
+                            Text("Computer Use mode")
+                            InfoButton {
+                                ComputerUseModeInfo()
+                            }
+                        }
+                    }
+                }
+                if profile.provider == .claude {
+                    ExtraToggle(isOn: $applyExtras, status: model.extraStatus)
                 }
                 if running {
                     Label("Running", systemImage: "exclamationmark.triangle")
@@ -239,12 +308,12 @@ struct EditProfileSheet: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    model.edit(profile, name: name, tint: tint, computerUseMode: computerUseMode)
+                    model.edit(profile, name: name, tint: tint, computerUseMode: computerUseMode, applyExtras: applyExtras)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(validation != nil || running || (name == profile.name && tint == profile.tint && computerUseMode == profile.usesComputerUseMode))
+                .disabled(validation != nil || running || (name == profile.name && tint == profile.tint && computerUseMode == profile.usesComputerUseMode && applyExtras == profile.usesExtras))
             }
         }
         .padding(22)
@@ -286,6 +355,46 @@ struct VerificationSheet: View {
             ForEach(report.checks, id: \.self) { Label($0, systemImage: "checkmark").font(.callout) }
             ForEach(report.warnings, id: \.self) { Label($0, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange) }
             ForEach(report.failures, id: \.self) { Label($0, systemImage: "xmark").font(.callout).foregroundStyle(.red) }
+        }
+    }
+}
+
+struct InfoButton<Content: View>: View {
+    @State private var showing = false
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        Button {
+            showing.toggle()
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("More info")
+        .popover(isPresented: $showing, arrowEdge: .trailing) {
+            content()
+                .padding(14)
+                .frame(width: 300, alignment: .leading)
+        }
+    }
+}
+
+struct ComputerUseModeInfo: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Computer Use mode")
+                .font(.headline)
+            Text("Uses an unmodified copy of ChatGPT so Computer Use keeps working. Sign-in and data stay separate.")
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Dock shows the original ChatGPT icon and name", systemImage: "dock.rectangle")
+                Label("Launch it from Barracks only", systemImage: "play.circle")
+                Label("Shares Accessibility and Screen Recording permissions with ChatGPT", systemImage: "lock.shield")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

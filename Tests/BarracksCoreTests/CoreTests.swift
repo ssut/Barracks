@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import BarracksCore
@@ -336,5 +337,199 @@ func scratchDirectory() throws -> URL {
         try ProfileOwnership.writeSidecar(for: bundle, profileID: id)
         #expect(ProfileOwnership.isOwned(bundle, by: id))
         #expect(!ProfileOwnership.isOwned(bundle, by: UUID()))
+    }
+}
+
+@Suite struct IconRecolorTests {
+    static func syntheticIcon(background: (Double, Double, Double), glyph: (Double, Double, Double), size: Int = 128) -> CGImage {
+        let context = IconComposer.makeContext(size: size)!
+        context.setFillColor(CGColor(srgbRed: background.0, green: background.1, blue: background.2, alpha: 1))
+        context.fill(CGRect(x: size / 10, y: size / 10, width: size * 8 / 10, height: size * 8 / 10))
+        context.setFillColor(CGColor(srgbRed: glyph.0, green: glyph.1, blue: glyph.2, alpha: 1))
+        context.fill(CGRect(x: size * 3 / 10, y: size * 3 / 10, width: size * 4 / 10, height: size * 4 / 10))
+        return context.makeImage()!
+    }
+
+    static func pixel(_ image: CGImage, x: Int, y: Int) -> SIMD3<Double> {
+        let pixels = Pixels(image)!
+        return pixels.color(at: (y * pixels.width + x) * 4)
+    }
+
+    static func close(_ a: SIMD3<Double>, _ b: SIMD3<Double>, tolerance: Double = 0.03) -> Bool {
+        IconRecolor.distance(a, b) <= tolerance
+    }
+
+    @Test func detectsBackgroundFromTileBorderAndGlyph() throws {
+        let image = Self.syntheticIcon(background: (0.9, 0.4, 0.25), glyph: (1, 1, 1))
+        let palette = try #require(IconRecolor.analyze(image))
+        #expect(Self.close(palette.background, SIMD3(0.9, 0.4, 0.25)))
+        #expect(Self.close(try #require(palette.glyph), SIMD3(1, 1, 1)))
+    }
+
+    @Test func swapsBackgroundAndKeepsGlyph() throws {
+        let image = Self.syntheticIcon(background: (0.9, 0.4, 0.25), glyph: (1, 1, 1))
+        let palette = try #require(IconRecolor.analyze(image))
+        let result = try #require(IconRecolor.recolor(image, palette: palette, tint: RGBColor(red: 0.2, green: 0.6, blue: 0.6)))
+        #expect(Self.close(Self.pixel(result, x: 20, y: 20), SIMD3(0.2, 0.6, 0.6)))
+        #expect(Self.close(Self.pixel(result, x: 64, y: 64), SIMD3(1, 1, 1)))
+        #expect(Pixels(result)!.data[3] == 0)
+    }
+
+    @Test func flipsGlyphWhenTintHidesIt() throws {
+        let image = Self.syntheticIcon(background: (0.97, 0.97, 0.97), glyph: (0.15, 0.15, 0.2))
+        let palette = try #require(IconRecolor.analyze(image))
+        let result = try #require(IconRecolor.recolor(image, palette: palette, tint: RGBColor(red: 0.13, green: 0.13, blue: 0.13)))
+        #expect(Self.close(Self.pixel(result, x: 20, y: 20), SIMD3(0.13, 0.13, 0.13)))
+        #expect(IconRecolor.luminance(Self.pixel(result, x: 64, y: 64)) > 0.8)
+        let kept = try #require(IconRecolor.recolor(image, palette: palette, tint: RGBColor(red: 0.9, green: 0.6, blue: 0.2)))
+        #expect(Self.close(Self.pixel(kept, x: 64, y: 64), SIMD3(0.15, 0.15, 0.2)))
+    }
+}
+
+@Suite struct LegacyMigrationTests {
+    func fakeHome() throws -> (URL, BarracksPaths) {
+        let home = try scratchDirectory()
+        let paths = BarracksPaths(
+            home: home,
+            supportRoot: home.appending(path: "Library/Application Support/Barracks", directoryHint: .isDirectory),
+            appsRoot: home.appending(path: "Applications/Barracks", directoryHint: .isDirectory),
+            logsRoot: home.appending(path: "Library/Logs/Barracks", directoryHint: .isDirectory),
+            registersWithLaunchServices: false
+        )
+        return (home, paths)
+    }
+
+    @Test func detectsClaudeWorkAppAndData() throws {
+        let (home, paths) = try fakeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(LegacyClaudeWork.state(main: nil, paths: paths).isEmpty)
+        let contents = home.appending(path: "Applications/Claude Work.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist = try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": LegacyClaudeWork.workBundleIdentifier], format: .xml, options: 0)
+        try plist.write(to: contents.appending(path: "Info.plist"))
+        let data = paths.applicationSupportDirectory.appending(path: "Claude-Work")
+        try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: data.appending(path: "config.json"))
+        let state = LegacyClaudeWork.state(main: nil, paths: paths)
+        #expect(state.workApp?.lastPathComponent == "Claude Work.app")
+        #expect(state.workData?.lastPathComponent == "Claude-Work")
+        #expect(state.canImportWork)
+        #expect(!state.canRestoreDefault)
+    }
+
+    @Test func ignoresForeignAppNamedClaudeWork() throws {
+        let (home, paths) = try fakeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let contents = home.appending(path: "Applications/Claude Work.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist = try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.other"], format: .xml, options: 0)
+        try plist.write(to: contents.appending(path: "Info.plist"))
+        #expect(LegacyClaudeWork.state(main: nil, paths: paths).workApp == nil)
+    }
+
+    @Test func parsesMainRecord() throws {
+        let root = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = String(repeating: "a", count: 64)
+        let b = String(repeating: "b", count: 64)
+        try Data("2.9939.4\n\(a)\n\(b)\n10\n".utf8).write(to: root.appending(path: "main-source"))
+        #expect(LegacyClaudeWork.mainRecord(root: root) == LegacyClaudeWork.MainRecord(version: "2.9939.4", sourceSHA256: a, patchedSHA256: b))
+        try Data("2.9939.4\nnot-a-hash\n\(b)\n".utf8).write(to: root.appending(path: "main-source"))
+        #expect(LegacyClaudeWork.mainRecord(root: root) == nil)
+    }
+}
+
+@Suite struct ExtraRunnerTests {
+    struct Fixture {
+        var root: URL
+        var archive: AsarArchive
+        var bundle: ExtraBundle
+        var work: URL
+    }
+
+    static func script(_ body: String) -> Data {
+        Data("#!/bin/sh\nset -e\n\(body)\n".utf8)
+    }
+
+    func fixture(index: String = "\"use strict\";require(\"./index.chunk-a1.js\");", patches: [(String, String, Data)]) throws -> Fixture {
+        let root = try scratchDirectory()
+        let asar = root.appending(path: "app.asar")
+        try AsarBuilder.build(files: [
+            ".vite/build/index.js": Data(index.utf8),
+            ".vite/build/index.chunk-a1.js": Data("var one=1;".utf8),
+            ".vite/build/index.chunk-b2.js": Data("var two=2;".utf8),
+            ".vite/build/mainView.js": Data("view();".utf8),
+        ], to: asar)
+        let bundleRoot = root.appending(path: "Extra", directoryHint: .isDirectory)
+        var entries: [[String: Any]] = []
+        for (name, target, body) in patches {
+            let binary = bundleRoot.appending(path: "patches/core/\(name)")
+            try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try body.write(to: binary)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+            entries.append(["name": name, "binary": "patches/core/\(name)", "target": target, "sha256": Hashing.sha256Hex(body)])
+        }
+        let append = Data(";/*appended*/\n".utf8)
+        try append.write(to: bundleRoot.appending(path: "main-append.js"))
+        let manifest: [String: Any] = [
+            "format": 1, "upstream": "test", "commit": String(repeating: "d", count: 40), "script": "x",
+            "patches": entries, "mainTarget": ".vite/build/index.js", "mainAppend": "main-append.js",
+            "mainAppendSHA256": Hashing.sha256Hex(append), "staleMarkers": ["__cdb", "__nav_spoof_applied"],
+        ]
+        try JSONSerialization.data(withJSONObject: manifest).write(to: bundleRoot.appending(path: "manifest.json"))
+        let work = root.appending(path: "work", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        return Fixture(root: root, archive: try AsarArchive.open(asar), bundle: try ExtraBundle.load(root: bundleRoot), work: work)
+    }
+
+    @Test func patchesChunkedBundleAndAppendsStartupModule() throws {
+        let f = try fixture(patches: [
+            ("p1", ".vite/build/index.js", Self.script("printf 'globalThis.__cdbT=1;' >> \"$1\"")),
+            ("p2", ".vite/build/mainView.js", Self.script("printf 'patched();' >> \"$1\"")),
+        ])
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let replacements = try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work)
+        #expect(Set(replacements.keys) == [".vite/build/index.js", ".vite/build/index.chunk-b2.js", ".vite/build/mainView.js"])
+        #expect(String(decoding: replacements[".vite/build/index.chunk-b2.js"]!, as: UTF8.self) == "var two=2;globalThis.__cdbT=1;")
+        #expect(String(decoding: replacements[".vite/build/index.js"]!, as: UTF8.self).hasSuffix(";/*appended*/\n"))
+        #expect(String(decoding: replacements[".vite/build/mainView.js"]!, as: UTF8.self) == "view();patched();")
+        let output = f.root.appending(path: "out.asar")
+        _ = try f.archive.write(to: output, replacing: replacements)
+        let written = try AsarArchive.open(output)
+        #expect(try written.verifyIntegrity(of: ".vite/build/index.chunk-b2.js"))
+        #expect(String(decoding: try written.readFile(".vite/build/index.chunk-a1.js"), as: UTF8.self) == "var one=1;")
+    }
+
+    @Test func rejectsAlreadyPatchedInput() throws {
+        let f = try fixture(index: "\"use strict\";var __cdbOld=1;require(\"./index.chunk-a1.js\");", patches: [
+            ("p1", ".vite/build/index.js", Self.script("true")),
+        ])
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        #expect(throws: BarracksError.self) { try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work) }
+    }
+
+    @Test func failsWhenPatchDoesNotFit() throws {
+        let f = try fixture(patches: [("p1", ".vite/build/index.js", Self.script("exit 3"))])
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        #expect(throws: BarracksError.self) { try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work) }
+    }
+
+    @Test func failsWhenPatchBreaksChunkMarkers() throws {
+        let f = try fixture(patches: [("p1", ".vite/build/index.js", Self.script("printf 'x' > \"$1\""))])
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        #expect(throws: BarracksError.self) { try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work) }
+    }
+
+    @Test func failsOnCrossChunkLocalIdentifier() throws {
+        let f = try fixture(patches: [("p1", ".vite/build/index.js", Self.script("printf 'var __cdbLocal=1;' | cat - \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\" && printf '__cdbLocal();' >> \"$1\""))])
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        #expect(throws: BarracksError.self) { try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work) }
+    }
+
+    @Test func rejectsTamperedPatchBinary() throws {
+        let f = try fixture(patches: [("p1", ".vite/build/index.js", Self.script("true"))])
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try Self.script("echo evil").write(to: f.bundle.root.appending(path: "patches/core/p1"))
+        #expect(throws: BarracksError.self) { try ExtraBundle.load(root: f.bundle.root) }
     }
 }

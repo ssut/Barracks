@@ -27,6 +27,7 @@ public enum BarracksError: Error, LocalizedError, Sendable, Equatable {
     case stopTimedOut(String)
     case registryCorrupt(String)
     case lockUnavailable(String)
+    case extraUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -80,6 +81,8 @@ public enum BarracksError: Error, LocalizedError, Sendable, Equatable {
             "“\(name)” did not quit in time."
         case .registryCorrupt(let reason):
             "The profile list could not be read: \(reason)"
+        case .extraUnavailable(let reason):
+            reason
         case .lockUnavailable(let reason):
             "Another Barracks operation is in progress: \(reason)"
         }

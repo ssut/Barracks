@@ -9,9 +9,11 @@ public struct CreateProfileRequest: Sendable {
     public var isolateToolConfig: Bool
     public var seedToolConfig: Bool
     public var computerUseMode: Bool
+    public var applyExtras: Bool
 
-    public init(provider: AppProvider = .claude, name: String, tint: ProfileTint, adoptDataDirectory: String? = nil, isolateToolConfig: Bool = true, seedToolConfig: Bool = false, computerUseMode: Bool = false) {
+    public init(provider: AppProvider = .claude, name: String, tint: ProfileTint, adoptDataDirectory: String? = nil, isolateToolConfig: Bool = true, seedToolConfig: Bool = false, computerUseMode: Bool = false, applyExtras: Bool = true) {
         self.computerUseMode = computerUseMode
+        self.applyExtras = applyExtras
         self.provider = provider
         self.name = name
         self.tint = tint
@@ -28,6 +30,7 @@ public enum Staleness: Sendable, Equatable {
     case builderUpdated
     case appUpdated(from: String, to: String)
     case sourceChanged
+    case extraChanged
 
     public var needsRebuild: Bool { self != .current }
 
@@ -39,6 +42,7 @@ public enum Staleness: Sendable, Equatable {
         case .builderUpdated: "Rebuild needed"
         case .appUpdated(let from, let to): "\(from) → \(to)"
         case .sourceChanged: "Source app changed"
+        case .extraChanged: "Extra changed"
         }
     }
 }
@@ -175,6 +179,7 @@ public final class ProfileManager: Sendable {
                 build: nil
             )
             profile.apply(request.tint)
+            if provider == .claude { profile.applyExtras = request.applyExtras }
             if request.computerUseMode {
                 guard provider.supportsComputerUseMode else {
                     throw BarracksError.appInvalid(path: provider.appBundleName, reason: "Computer Use mode is only available for ChatGPT")
@@ -182,9 +187,9 @@ public final class ProfileManager: Sendable {
                 profile.computerUseMode = true
                 profile.bundleIdentifier = provider.officialBundleIdentifier
             }
-            Log.notice("profile.create", ["profile": id.uuidString, "provider": provider.rawValue, "name": name, "adopted": String(adopted), "data": dataDirectory])
+            Log.notice("profile.create", ["profile": id.uuidString, "provider": provider.rawValue, "name": name, "adopted": String(adopted), "data": dataDirectory, "extras": String(profile.usesExtras)])
 
-            let installation = try installation(for: provider)
+            let installation = try sourceInstallation(for: profile)
             let target = targetAppURL(for: profile)
             let outcome = try builder.build(BuildRequest(profile: profile, installation: installation, targetAppURL: target, previousAppURL: nil), progress: progress)
             profile.appBundlePath = outcome.appURL.path(percentEncoded: false).trimmingTrailingSlash
@@ -262,7 +267,7 @@ public final class ProfileManager: Sendable {
         return path
     }
 
-    public func editProfile(id: UUID, name newName: String?, tint newTint: ProfileTint?, computerUseMode newMode: Bool? = nil, progress: @Sendable (BuildStep) -> Void = { _ in }) throws -> Profile {
+    public func editProfile(id: UUID, name newName: String?, tint newTint: ProfileTint?, computerUseMode newMode: Bool? = nil, applyExtras newExtras: Bool? = nil, progress: @Sendable (BuildStep) -> Void = { _ in }) throws -> Profile {
         try exclusiveOperation("edit") {
             let profiles = try registry.load()
             guard var profile = profiles.first(where: { $0.id == id }) else { throw BarracksError.profileNotFound(id.uuidString) }
@@ -289,8 +294,12 @@ public final class ProfileManager: Sendable {
                 profile.bundleIdentifier = newMode ? profile.provider.officialBundleIdentifier : Profile.bundleIdentifier(forToken: profile.token, provider: profile.provider)
                 changed = true
             }
+            if let newExtras, profile.provider == .claude, newExtras != profile.usesExtras {
+                profile.applyExtras = newExtras
+                changed = true
+            }
             guard changed else { return profile }
-            Log.notice("profile.edit", ["profile": id.uuidString, "name": profile.name, "color": profile.tint.cacheKey])
+            Log.notice("profile.edit", ["profile": id.uuidString, "name": profile.name, "color": profile.tint.cacheKey, "extras": String(profile.usesExtras)])
             return try rebuildUnlocked(profile, progress: progress)
         }
     }
@@ -309,7 +318,7 @@ public final class ProfileManager: Sendable {
         if state(of: current ?? profile).isRunning {
             throw BarracksError.profileRunning(profile.displayName)
         }
-        let installation = try installation(for: profile.provider)
+        let installation = try sourceInstallation(for: profile)
         let target = targetAppURL(for: profile)
         let outcome = try builder.build(BuildRequest(profile: profile, installation: installation, targetAppURL: target, previousAppURL: previousURL), progress: progress)
         profile.appBundlePath = outcome.appURL.path(percentEncoded: false).trimmingTrailingSlash
@@ -380,15 +389,75 @@ public final class ProfileManager: Sendable {
         ProfileRuntime.state(appURL: profile.appBundleURL, bundleIdentifier: profile.bundleIdentifier, dataDirectory: profile.dataDirectoryURL)
     }
 
-    public func staleness(of profile: Profile, installation: AppInstallation?) -> Staleness {
+    public func extraStatus() -> ExtraPatchStatus {
+        ExtraPatchStatus.current()
+    }
+
+    public func legacyState() -> LegacyClaudeWorkState {
+        LegacyClaudeWork.state(main: try? installation(for: .claude), paths: paths)
+    }
+
+    public func sourceInstallation(for profile: Profile, main given: AppInstallation? = nil) throws -> AppInstallation {
+        let main = try given ?? installation(for: profile.provider)
+        guard profile.provider == .claude, main.provider == .claude else { return main }
+        switch LegacyClaudeWork.mainState(of: main, paths: paths) {
+        case .clean:
+            return main
+        case .patched(let pristine):
+            guard let pristine else {
+                throw BarracksError.extraUnavailable("The Default Claude was modified by the old Claude Work script and its original backup is missing. Reinstall Claude.")
+            }
+            let source = try LegacyClaudeWork.pristineInstallation(pristine)
+            Log.debug("profile.source", ["profile": profile.id.uuidString, "source": "legacy_pristine"])
+            return source
+        }
+    }
+
+    public func restoreDefaultClaude() throws {
+        try exclusiveOperation("restore-default") {
+            let main = try installation(for: .claude)
+            let official = try official(for: .claude)
+            if officialState(official).isRunning { throw BarracksError.profileRunning("Claude") }
+            try LegacyClaudeWork.restoreDefault(main: main, paths: paths)
+        }
+    }
+
+    public func importClaudeWork(name: String = "Work", tint: ProfileTint = .preset(.indigo), progress: @Sendable (BuildStep) -> Void = { _ in }) throws -> Profile {
+        let state = legacyState()
+        guard let data = state.workData else { throw BarracksError.dataDirectoryInvalid(path: "Claude-Work", reason: "no Claude Work data was found") }
+        if let app = state.workApp, LegacyClaudeWork.workAppRunning(app) { throw BarracksError.profileRunning("Claude Work") }
+        Log.notice("legacy.import_work_start", ["data": data.path])
+        let profile = try createProfile(CreateProfileRequest(
+            provider: .claude,
+            name: name,
+            tint: tint,
+            adoptDataDirectory: data.path(percentEncoded: false),
+            isolateToolConfig: true,
+            applyExtras: ExtraPatchStatus.current().isAvailable
+        ), progress: progress)
+        if let app = state.workApp {
+            try LegacyClaudeWork.retireWorkApp(app, paths: paths)
+        }
+        Log.notice("legacy.import_work_done", ["profile": profile.id.uuidString])
+        return profile
+    }
+
+    public func staleness(of profile: Profile, installation given: AppInstallation?) -> Staleness {
         guard let build = profile.build else { return .neverBuilt }
         guard let app = profile.appBundleURL, FileManager.default.fileExists(atPath: app.path) else { return .appMissing }
         if build.builderVersion < ProfileAppBuilder.builderVersion { return .builderUpdated }
+        let installation = given.flatMap { main in (try? sourceInstallation(for: profile, main: main)) ?? main }
         guard let installation, installation.provider == profile.provider else { return .current }
         if installation.version != build.appVersion || installation.build != build.appBuild {
             return .appUpdated(from: build.appVersion, to: installation.version)
         }
-        if let sha = try? FingerprintCache.shared.sha256(for: installation), sha != build.sourceAsarSHA256 { return .sourceChanged }
+        guard let sha = try? FingerprintCache.shared.sha256(for: installation) else { return .current }
+        if sha != build.sourceAsarSHA256 { return .sourceChanged }
+        if profile.provider == .claude && !profile.usesComputerUseMode {
+            let expected = profile.usesExtras ? try? ExtraBuilder.signature(sourceSHA256: sha) : nil
+            if profile.usesExtras, let expected, build.extraSignature != expected { return .extraChanged }
+            if !profile.usesExtras, build.extraSignature != nil { return .extraChanged }
+        }
         return .current
     }
 

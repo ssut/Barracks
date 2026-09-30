@@ -56,6 +56,15 @@ public struct AsarArchive {
         return node
     }
 
+    public func childFiles(of directory: String) throws -> [String] {
+        let node = directory.isEmpty ? header : try entry(directory)
+        guard let files = node["files"] as? [String: Any] else { throw BarracksError.asarMalformed("\(directory) is not a directory") }
+        return files.compactMap { name, value in
+            guard let child = value as? [String: Any], child["files"] == nil, child["link"] == nil else { return nil }
+            return name
+        }
+    }
+
     public func readFile(_ path: String) throws -> Data {
         let node = try entry(path)
         if node["files"] != nil { throw BarracksError.asarMalformed("\(path) is a directory") }

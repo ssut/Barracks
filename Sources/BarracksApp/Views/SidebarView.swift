@@ -5,14 +5,34 @@ import SwiftUI
 @MainActor
 enum IconCache {
     static var images: [String: NSImage] = [:]
+    static var sources: [AppProvider: URL] = [:]
+
+    static func updateSources(_ next: [AppProvider: URL]) {
+        guard next != sources else { return }
+        sources = next
+        images.removeAll()
+        IconRecolor.invalidate()
+    }
 
     static func profile(tint: ProfileTint, name: String, provider: AppProvider, points: Int) -> NSImage {
-        let key = "\(provider.rawValue)|\(tint.cacheKey)|\(IconComposer.initial(of: name))|\(points)"
+        let source = sources[provider]
+        let key = "\(provider.rawValue)|\(tint.cacheKey)|\(source == nil ? IconComposer.initial(of: name) : "app")|\(points)"
         if let cached = images[key] { return cached }
         if images.count > 400 { images.removeAll() }
-        let image = IconComposer.profileImage(tint: tint, name: name, provider: provider, points: points)
+        let image = IconComposer.profileImage(tint: tint, name: name, provider: provider, sourceApp: source, points: points)
         images[key] = image
         return image
+    }
+
+    static func official(provider: AppProvider, points: Int) -> NSImage {
+        let key = "official|\(provider.rawValue)|\(points)"
+        if let cached = images[key] { return cached }
+        guard let source = sources[provider], let image = IconRecolor.officialIcon(appURL: source, size: points * 2) else {
+            return profile(tint: .preset(.slate), name: provider.officialIconName, provider: provider, points: points)
+        }
+        let result = NSImage(cgImage: image, size: NSSize(width: points, height: points))
+        images[key] = result
+        return result
     }
 
     static func app(points: Int) -> NSImage {
@@ -25,17 +45,23 @@ enum IconCache {
 }
 
 struct ProfileIconView: View {
-    var tint: ProfileTint
+    var tint: ProfileTint?
     var name: String
     var provider: AppProvider = .claude
     var size: CGFloat
 
     var body: some View {
-        Image(nsImage: IconCache.profile(tint: tint, name: name, provider: provider, points: Int(max(size, 16))))
+        Image(nsImage: image)
             .resizable()
             .interpolation(.high)
             .frame(width: size, height: size)
             .accessibilityHidden(true)
+    }
+
+    var image: NSImage {
+        let points = Int(max(size, 16))
+        guard let tint else { return IconCache.official(provider: provider, points: points) }
+        return IconCache.profile(tint: tint, name: name, provider: provider, points: points)
     }
 }
 
@@ -51,24 +77,54 @@ struct AppIconView: View {
     }
 }
 
-struct StatusDot: View {
-    var state: RuntimeState
-    var columnWidth: CGFloat?
+extension RuntimeState {
+    var indicatorColor: Color? {
+        switch self {
+        case .running: .green
+        case .notRunning: nil
+        case .dataInUseElsewhere: .red
+        }
+    }
+}
+
+struct IndicatorDot: View {
+    var color: Color
+    var diameter: CGFloat
 
     var body: some View {
         Circle()
             .fill(color)
-            .frame(width: 7, height: 7)
-            .frame(width: columnWidth)
-            .help(state.summary)
+            .frame(width: diameter, height: diameter)
+            .overlay(Circle().strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: max(1.5, diameter * 0.18)))
+    }
+}
+
+struct StatusIconView: View {
+    var tint: ProfileTint?
+    var name: String
+    var provider: AppProvider
+    var size: CGFloat
+    var state: RuntimeState
+    var rebuildHint: String? = nil
+
+    var diameter: CGFloat { min(max(8, size * 0.28), 18) }
+    var inset: CGFloat { size * 0.02 }
+
+    var indicator: (color: Color, help: String)? {
+        if let color = state.indicatorColor { return (color, state.summary) }
+        if let rebuildHint { return (.orange, rebuildHint) }
+        return nil
     }
 
-    var color: Color {
-        switch state {
-        case .running: .green
-        case .notRunning: .clear
-        case .dataInUseElsewhere: .orange
-        }
+    var body: some View {
+        ProfileIconView(tint: tint, name: name, provider: provider, size: size)
+            .overlay(alignment: .bottomTrailing) {
+                if let indicator {
+                    IndicatorDot(color: indicator.color, diameter: diameter)
+                        .offset(x: -inset, y: -inset)
+                        .help(indicator.help)
+                }
+            }
     }
 }
 
@@ -148,7 +204,7 @@ struct SidebarView: View {
                     .selectionDisabled()
                 if let official = model.officials[provider] {
                     HStack(spacing: 10) {
-                        ProfileIconView(tint: .preset(.slate), name: provider.officialIconName, provider: provider, size: 22)
+                        StatusIconView(tint: nil, name: provider.officialIconName, provider: provider, size: 22, state: official.state)
                         VStack(alignment: .leading, spacing: 1) {
                             Text("Default")
                             if let account = model.accounts[official.dataPath]?.headline {
@@ -161,7 +217,6 @@ struct SidebarView: View {
                             }
                         }
                         Spacer()
-                        StatusDot(state: official.state, columnWidth: 14)
                     }
                     .tag(SidebarSelection.official(provider))
                 }
@@ -207,7 +262,7 @@ struct ProfileSidebarRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ProfileIconView(tint: row.profile.tint, name: row.profile.name, provider: row.profile.provider, size: 22)
+            StatusIconView(tint: row.profile.tint, name: row.profile.name, provider: row.profile.provider, size: 22, state: row.state, rebuildHint: row.staleness.needsRebuild ? row.staleness.summary : nil)
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.profile.name)
                 if let account = model.accounts[row.profile.dataDirectory]?.headline {
@@ -218,14 +273,8 @@ struct ProfileSidebarRow: View {
                         .minimumScaleFactor(0.85)
                         .truncationMode(.middle)
                 }
-                if row.staleness.needsRebuild {
-                    Text("Needs rebuild")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
             }
             Spacer()
-            StatusDot(state: row.state, columnWidth: 14)
         }
         .contextMenu {
             Button(row.state.isRunning ? "Switch To" : "Launch") { model.launch(row) }
@@ -233,7 +282,7 @@ struct ProfileSidebarRow: View {
             Button("Rebuild") { model.rebuild(row.profile) }
             Button("Show Data in Finder") { model.reveal(row.profile.dataDirectory) }
             Divider()
-            Button("Delete…", role: .destructive) { model.deletingProfile = row.profile }
+            Button("Delete…", role: .destructive) { model.requestDelete(row.profile) }
         }
     }
 }
