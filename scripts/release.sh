@@ -24,7 +24,7 @@ log() { printf '[%s] INFO %s\n' "$(date '+%H:%M:%S')" "$*"; }
 die() { printf '[%s] ERROR %s\n' "$(date '+%H:%M:%S')" "$*" >&2; exit 1; }
 
 TAG="v$VERSION"
-BUILD_NUMBER="$(date +%Y%m%d%H%M)"
+BUILD_NUMBER="$(TZ=Asia/Seoul date +%Y%m%d%H%M)"
 DIST="$ROOT/dist"
 DMG="$DIST/$APP_NAME-$VERSION.dmg"
 ZIP="$DIST/$APP_NAME-$VERSION.zip"
@@ -38,23 +38,45 @@ case "$VERSION" in *-*) CHANNEL=preview; PRERELEASE=1 ;; *) CHANNEL=stable; PRER
 log "preflight version=$VERSION tag=$TAG channel=$CHANNEL dry_run=$DRY_RUN"
 git -C "$ROOT" diff --quiet && git -C "$ROOT" diff --cached --quiet || die "tracked changes are not committed"
 git -C "$ROOT" fetch -q origin main
-[[ "$(git -C "$ROOT" rev-parse HEAD)" == "$(git -C "$ROOT" rev-parse origin/main)" ]] || die "HEAD is not pushed to origin/main"
-if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then die "release already exists tag=$TAG"; fi
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    git -C "$ROOT" merge-base --is-ancestor HEAD origin/main || die "HEAD is not on origin/main"
+else
+    [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$(git -C "$ROOT" rev-parse origin/main)" ]] || die "HEAD is not pushed to origin/main"
+fi
+if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+    [[ "$DRY_RUN" -eq 1 ]] && log "release exists tag=$TAG (dry run continues)" || die "release already exists tag=$TAG"
+fi
 
 IDENTITY="${BARRACKS_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | grep 'Developer ID Application' | head -1 | awk '{print $2}')}"
 [[ -n "$IDENTITY" ]] || die "no Developer ID Application identity in the keychain"
 
 swift package --package-path "$ROOT" resolve >/dev/null
 [[ -x "$SPARKLE_BIN/sign_update" ]] || die "sparkle tools missing path=$SPARKLE_BIN"
-KEYCHAIN_KEY="$("$SPARKLE_BIN/generate_keys" --account "$SPARKLE_ACCOUNT" -p 2>/dev/null | tail -1)"
-PLIST_KEY="$(plutil -extract SUPublicEDKey raw "$ROOT/Resources/Info.plist")"
-[[ -n "$KEYCHAIN_KEY" && "$KEYCHAIN_KEY" == "$PLIST_KEY" ]] || die "sparkle key mismatch account=$SPARKLE_ACCOUNT"
+if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+    python3 "$ROOT/scripts/verify-signing-key.py" --info-plist "$ROOT/Resources/Info.plist" || die "sparkle key mismatch source=env"
+    SPARKLE_ARGS=(--private-key-file -)
+    SPARKLE_SOURCE=env
+else
+    KEYCHAIN_KEY="$("$SPARKLE_BIN/generate_keys" --account "$SPARKLE_ACCOUNT" -p 2>/dev/null | tail -1)"
+    PLIST_KEY="$(plutil -extract SUPublicEDKey raw "$ROOT/Resources/Info.plist")"
+    [[ -n "$KEYCHAIN_KEY" && "$KEYCHAIN_KEY" == "$PLIST_KEY" ]] || die "sparkle key mismatch account=$SPARKLE_ACCOUNT"
+    SPARKLE_ARGS=(--account "$SPARKLE_ACCOUNT")
+    SPARKLE_SOURCE="keychain:$SPARKLE_ACCOUNT"
+fi
+if [[ -n "${BARRACKS_NOTARY_KEY:-}" ]]; then
+    [[ -f "$BARRACKS_NOTARY_KEY" && -n "${BARRACKS_NOTARY_KEY_ID:-}" && -n "${BARRACKS_NOTARY_ISSUER:-}" ]] || die "notary api key settings incomplete"
+    NOTARY_ARGS=(--key "$BARRACKS_NOTARY_KEY" --key-id "$BARRACKS_NOTARY_KEY_ID" --issuer "$BARRACKS_NOTARY_ISSUER")
+    NOTARY_SOURCE=api-key
+else
+    NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
+    NOTARY_SOURCE="profile:$NOTARY_PROFILE"
+fi
 FIREBASE_PLIST="$ROOT/Resources/GoogleService-Info.plist"
 [[ -f "$FIREBASE_PLIST" ]] || die "firebase config missing path=$FIREBASE_PLIST"
 [[ "$(plutil -extract BUNDLE_ID raw "$FIREBASE_PLIST")" == "$(plutil -extract CFBundleIdentifier raw "$ROOT/Resources/Info.plist")" ]] || die "firebase config bundle id mismatch"
 UPLOAD_SYMBOLS="$ROOT/.build/checkouts/firebase-ios-sdk/Crashlytics/upload-symbols"
-xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 || die "notary profile missing name=$NOTARY_PROFILE (run: xcrun notarytool store-credentials $NOTARY_PROFILE)"
-log "preflight ok identity=${IDENTITY:0:8} sparkle_account=$SPARKLE_ACCOUNT notary_profile=$NOTARY_PROFILE"
+xcrun notarytool history "${NOTARY_ARGS[@]}" >/dev/null 2>&1 || die "notary credentials unusable source=$NOTARY_SOURCE"
+log "preflight ok identity=${IDENTITY:0:8} sparkle=$SPARKLE_SOURCE notary=$NOTARY_SOURCE"
 
 BARRACKS_VERSION="$VERSION" BARRACKS_BUILD="$BUILD_NUMBER" BARRACKS_SIGN_IDENTITY="$IDENTITY" "$ROOT/scripts/build-app.sh"
 APP="$ROOT/build/$APP_NAME.app"
@@ -73,13 +95,13 @@ codesign --force --sign "$IDENTITY" --timestamp "$DMG"
 log "dmg signed path=$DMG bytes=$(wc -c < "$DMG" | tr -d ' ')"
 
 set +e
-SUBMIT="$(xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait --timeout 30m --output-format json)"
+SUBMIT="$(xcrun notarytool submit "$DMG" "${NOTARY_ARGS[@]}" --wait --timeout 30m --output-format json)"
 set -e
 STATUS="$(printf '%s' "$SUBMIT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || echo unknown)"
 SUBMISSION="$(printf '%s' "$SUBMIT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || echo "")"
 log "notarize submission=$SUBMISSION status=$STATUS"
 if [[ "$STATUS" != "Accepted" ]]; then
-    [[ -n "$SUBMISSION" ]] && xcrun notarytool log "$SUBMISSION" --keychain-profile "$NOTARY_PROFILE" || true
+    [[ -n "$SUBMISSION" ]] && xcrun notarytool log "$SUBMISSION" "${NOTARY_ARGS[@]}" || true
     die "notarization failed status=$STATUS"
 fi
 xcrun stapler staple "$DMG"
@@ -126,13 +148,14 @@ gh release create "$TAG" "$DMG" "$ZIP" -R "$REPO" "${FLAGS[@]}"
 log "release status=created tag=$TAG"
 
 APPCAST_DIR="$WORK/appcast"
-if git clone -q --branch "$APPCAST_BRANCH" --depth 1 "git@github.com:$REPO.git" "$APPCAST_DIR" 2>/dev/null; then
+APPCAST_REMOTE="${BARRACKS_APPCAST_REMOTE:-git@github.com:$REPO.git}"
+if git clone -q --branch "$APPCAST_BRANCH" --depth 1 "$APPCAST_REMOTE" "$APPCAST_DIR" 2>/dev/null; then
     log "appcast branch=existing"
 else
     mkdir -p "$APPCAST_DIR"
     git -C "$APPCAST_DIR" init -q
     git -C "$APPCAST_DIR" checkout -q -b "$APPCAST_BRANCH"
-    git -C "$APPCAST_DIR" remote add origin "git@github.com:$REPO.git"
+    git -C "$APPCAST_DIR" remote add origin "$APPCAST_REMOTE"
     log "appcast branch=created"
 fi
 python3 "$ROOT/scripts/make-appcast.py" \
@@ -146,9 +169,13 @@ python3 "$ROOT/scripts/make-appcast.py" \
     --release-notes-file "$NOTES" \
     --full-release-notes-url "https://github.com/$REPO/releases" \
     --sign-update "$SPARKLE_BIN/sign_update" \
-    --account "$SPARKLE_ACCOUNT" \
+    "${SPARKLE_ARGS[@]}" \
     --feed-url "https://raw.githubusercontent.com/$REPO/$APPCAST_BRANCH/$APPCAST_FILE"
 git -C "$APPCAST_DIR" add "$APPCAST_FILE"
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    git -C "$APPCAST_DIR" config user.name "github-actions[bot]"
+    git -C "$APPCAST_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+fi
 git -C "$APPCAST_DIR" commit -q -m "appcast: $TAG ($CHANNEL)"
 git -C "$APPCAST_DIR" push -q origin "$APPCAST_BRANCH"
 log "appcast status=published url=https://raw.githubusercontent.com/$REPO/$APPCAST_BRANCH/$APPCAST_FILE"

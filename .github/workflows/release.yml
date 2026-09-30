@@ -1,0 +1,190 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths: ['VERSION']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, sign and notarize without publishing
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  APP: Barracks
+
+jobs:
+  check:
+    name: check-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      proceed: ${{ steps.resolve.outputs.proceed }}
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "version status=fail reason=malformed value=$VERSION"
+            exit 1
+          fi
+          TAG="v$VERSION"
+          PROCEED=true
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "$DRY_RUN" != "true" ]; then
+            PROCEED=false
+            echo "version status=skip reason=release_exists tag=$TAG"
+          fi
+          {
+            echo "proceed=$PROCEED"
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+          echo "version resolved version=$VERSION tag=$TAG proceed=$PROCEED dry_run=$DRY_RUN"
+
+  release:
+    name: release-macos
+    needs: check
+    if: needs.check.outputs.proceed == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        id: xcode
+        run: |
+          set -euo pipefail
+          XCODE_APP="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1 || true)"
+          [ -n "$XCODE_APP" ] || XCODE_APP=/Applications/Xcode.app
+          sudo xcode-select -s "$XCODE_APP"
+          XCODE_VERSION="$(xcodebuild -version | head -1 | awk '{print $2}')"
+          echo "version=$XCODE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "toolchain xcode=$XCODE_VERSION swift=$(swift -version 2>&1 | head -1)"
+
+      - name: Restore caches
+        uses: actions/cache@v6
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/.nimble
+          key: release-${{ runner.os }}-xcode${{ steps.xcode.outputs.version }}-${{ hashFiles('Package.resolved', 'Resources/extra/extra_port.py') }}
+          restore-keys: |
+            release-${{ runner.os }}-xcode${{ steps.xcode.outputs.version }}-
+
+      - name: Install Extra toolchain
+        run: |
+          set -euo pipefail
+          command -v nim >/dev/null 2>&1 || brew install nim
+          echo "$HOME/.nimble/bin" >> "$GITHUB_PATH"
+          echo "toolchain nim=$(nim --version | head -1) python=$(python3 --version)"
+
+      - name: Write Firebase config
+        env:
+          PLIST_B64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+        run: |
+          set -euo pipefail
+          [ -n "${PLIST_B64:-}" ] || { echo "firebase status=fail reason=secret_missing"; exit 1; }
+          printf '%s' "$PLIST_B64" | base64 -d > Resources/GoogleService-Info.plist
+          plutil -lint Resources/GoogleService-Info.plist > /dev/null
+          echo "firebase status=written"
+
+      - name: Import signing certificate
+        id: signing
+        env:
+          CERT_B64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "${CERT_B64:-}" ] && [ -n "${CERT_PASSWORD:-}" ] || { echo "signing status=fail reason=certificate_secrets_missing"; exit 1; }
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          printf '%s' "$CERT_B64" | base64 -d > "$CERT_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$CERT_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep 'Developer ID Application' | head -1 | awk '{print $2}')"
+          [ -n "$IDENTITY" ] || { echo "signing status=fail reason=no_developer_id"; exit 1; }
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
+          echo "signing status=ready identity=${IDENTITY:0:8}"
+
+      - name: Write notary key
+        env:
+          API_KEY_B64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          [ -n "${API_KEY_B64:-}" ] || { echo "notary status=fail reason=api_key_secret_missing"; exit 1; }
+          printf '%s' "$API_KEY_B64" | base64 -d > "$RUNNER_TEMP/notary_key.p8"
+          echo "notary status=key_written"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BARRACKS_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          BARRACKS_NOTARY_KEY: ${{ runner.temp }}/notary_key.p8
+          BARRACKS_NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          BARRACKS_NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          BARRACKS_APPCAST_REMOTE: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+          [ "$DRY_RUN" = "true" ] && ARGS+=(--dry-run)
+          ./scripts/release.sh ${ARGS[@]+"${ARGS[@]}"}
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.APP }}-${{ needs.check.outputs.version }}
+          path: dist/*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Clean up
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -f "$RUNNER_TEMP/notary_key.p8" Resources/GoogleService-Info.plist
+          KEYCHAIN="${{ steps.signing.outputs.keychain }}"
+          if [ -n "$KEYCHAIN" ] && [ -f "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN" || true; fi
+          echo "cleanup status=done"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${APP} ${{ needs.check.outputs.version }}"
+            echo ""
+            echo "- dry run: \`${{ github.event.inputs.dry_run || 'false' }}\`"
+            echo "- release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${{ needs.check.outputs.tag }}"
+            echo "- feed: https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/gh-pages/appcast.xml"
+          } >> "$GITHUB_STEP_SUMMARY"

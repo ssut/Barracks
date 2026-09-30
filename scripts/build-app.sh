@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${BARRACKS_VERSION:-$(tr -d '[:space:]' < "$ROOT/VERSION")}"
-BUILD_NUMBER="${BARRACKS_BUILD:-$(date +%Y%m%d%H%M)}"
+BUILD_NUMBER="${BARRACKS_BUILD:-$(TZ=Asia/Seoul date +%Y%m%d%H%M)}"
 IDENTITY="${BARRACKS_SIGN_IDENTITY:--}"
 OUT_DIR="$ROOT/build"
 APP="$OUT_DIR/Barracks.app"
