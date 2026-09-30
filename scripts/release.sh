@@ -114,8 +114,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     exit 0
 fi
 
-"$UPLOAD_SYMBOLS" -gsp "$FIREBASE_PLIST" -p mac -- "$DSYM"
-log "dsym uploaded uuid=$APP_UUID"
+if DEVELOPER_DIR="$(xcode-select -p)" "$UPLOAD_SYMBOLS" -gsp "$FIREBASE_PLIST" -p mac -- "$DSYM"; then
+    log "dsym uploaded uuid=$APP_UUID"
+else
+    printf '[%s] WARN dsym upload failed uuid=%s; rerun upload-symbols manually\n' "$(date '+%H:%M:%S')" "$APP_UUID" >&2
+fi
 
 FLAGS=(--target "$(git -C "$ROOT" rev-parse HEAD)" --title "$TAG" --notes-file "$NOTES")
 [[ "$PRERELEASE" -eq 1 ]] && FLAGS+=(--prerelease)
