@@ -6,6 +6,23 @@
     <description>Most recent updates to Barracks</description>
     <language>en</language>
     <item>
+      <title>0.1.1</title>
+      <pubDate>Wed, 30 Sep 2026 02:50:13 +0000</pubDate>
+      <sparkle:version>202609301149</sparkle:version>
+      <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">- fix(release): point upload-symbols at Xcode and keep dSYM upload failures non-blocking
+- feat(telemetry): add Firebase Analytics and Crashlytics with opt-in consent
+- docs: add project README and Apache 2.0 license
+- feat(site): rotate Extra heading with synced carousel and natural Korean/Japanese copy
+- feat(release): add Sparkle auto-update and notarized release pipeline
+- feat(site): add GitHub Pages landing page in English, Korean, and Japanese
+- feat(barracks): add built-in Extra, Claude Work migration, and UI refinements
+- feat(barracks): add multi-profile manager for Claude and ChatGPT desktop apps</description>
+      <sparkle:fullReleaseNotesLink>https://github.com/ssut/Barracks/releases</sparkle:fullReleaseNotesLink>
+      <enclosure url="https://github.com/ssut/Barracks/releases/download/v0.1.1/Barracks-0.1.1.dmg" length="4477490" type="application/octet-stream" sparkle:edSignature="c+PiLUBTQC/IX15Kl1WjQQXJl+n+8k1FnWfUUNIIbqmuHLyN9rjcqnfXKc7D6HDNTY28sfJ+7d65A4WnaqJ/DQ==" />
+    </item>
+    <item>
       <title>0.1.0</title>
       <pubDate>Wed, 30 Sep 2026 02:25:32 +0000</pubDate>
       <sparkle:version>202609301124</sparkle:version>
