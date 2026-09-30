@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Barracks — separate Claude &amp; ChatGPT on one Mac</title>
+<meta name="description" content="Separate Claude &amp; ChatGPT profiles. Own login, own data. All at once.">
+<meta name="theme-color" content="#151517" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<link rel="icon" href="favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="canonical" href="https://ssut.github.io/Barracks/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ssut.github.io/Barracks/">
+<meta property="og:image" content="https://ssut.github.io/Barracks/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://ssut.github.io/Barracks/og.png">
+<meta property="og:title" content="Barracks">
+<meta property="og:description" content="Separate Claude &amp; ChatGPT profiles. Own login, own data. All at once.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="skip" href="#main" data-i18n="a11y.skip">Skip to content</a>
+
+<header class="topbar">
+<div class="nav">
+  <a class="brand" href="#main">
+    <img src="icon.png" alt="" width="24" height="24">
+    <span>Barracks</span>
+  </a>
+  <a class="bmc" href="https://buymeacoffee.com/suhunhan95" target="_blank" rel="noopener" aria-label="Buy me a coffee">
+    <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3.4 6.6h11v6.1a3.4 3.4 0 0 1-3.4 3.4H6.8a3.4 3.4 0 0 1-3.4-3.4V6.6Z"/>
+      <path d="M14.4 8.1h1.3a2 2 0 0 1 0 4h-1.3"/>
+      <path d="M6.3 3.5v1.3M9.6 2.9v1.9M12.9 3.5v1.3"/>
+    </svg>
+    <span>Buy me a coffee</span>
+  </a>
+  <a class="ghstar" id="ghstar" href="#" aria-label="Star Barracks on GitHub">
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+      <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/>
+    </svg>
+    <span>Star</span>
+    <b id="ghstar-count" hidden></b>
+  </a>
+  <span class="lang" role="group" aria-label="Language">
+    <button type="button" data-lang="en" aria-pressed="true">EN</button>
+    <button type="button" data-lang="ko" aria-pressed="false">한국어</button>
+    <button type="button" data-lang="ja" aria-pressed="false">日本語</button>
+  </span>
+  <button type="button" class="theme" id="theme" aria-label="Switch to light appearance">
+    <svg class="theme-sun" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+      <circle cx="10" cy="10" r="3.6"/>
+      <path d="M10 1.4v2.2M10 16.4v2.2M18.6 10h-2.2M3.6 10H1.4M16.1 3.9l-1.6 1.6M5.5 14.5l-1.6 1.6M16.1 16.1l-1.6-1.6M5.5 5.5 3.9 3.9"/>
+    </svg>
+    <svg class="theme-moon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 12.3A7.5 7.5 0 0 1 7.7 3a7.5 7.5 0 1 0 9.3 9.3Z"/>
+    </svg>
+  </button>
+</div>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <h1 class="headline" id="headline">
+      <span class="sr-only" id="headline-sr"></span>
+      <span aria-hidden="true" class="headline-visual">
+        <span class="before" data-i18n="hero.before">Separate Claude &amp; ChatGPT for</span>
+        <span class="rotator" id="rotator"><span class="word in" style="--tint:#e0a33a">Work</span></span><span class="after" data-i18n="hero.after"></span>
+      </span>
+    </h1>
+    <p class="sub" data-i18n="hero.sub">Account switching made easy.</p>
+    <div class="cta">
+      <a class="btn" id="download" href="#">
+        <span id="download-label">Download</span>
+      </a>
+      <span class="req" data-i18n="hero.req">macOS 14+ · Apple Silicon</span>
+    </div>
+  </section>
+
+  <section class="shot-stage">
+    <img class="shot" src="shots/main.webp" width="1944" height="1448" data-i18n-alt="a11y.shot.main"
+         alt="Barracks window with Claude and ChatGPT profiles, each with its own colored icon.">
+  </section>
+
+  <section class="extra">
+    <p class="badge reveal"><span data-i18n="extra.badge">Claude only</span></p>
+    <h2 class="reveal" data-i18n="extra.h2">Extra, built in.</h2>
+    <p class="lede reveal" data-i18n="extra.lede">Themes, fonts and more for Claude. Per profile.</p>
+    <div class="tabs reveal" role="tablist">
+      <button type="button" role="tab" aria-selected="true" data-shot="themes" data-i18n="extra.tab.themes">Themes</button>
+      <button type="button" role="tab" aria-selected="false" data-shot="community" data-i18n="extra.tab.community">Features</button>
+    </div>
+    <div class="swap reveal">
+      <img class="shot on" data-name="themes" src="shots/themes.webp" width="2000" height="1489" data-i18n-alt="a11y.shot.themes"
+           alt="Claude settings showing the Extra theme gallery.">
+      <img class="shot" data-name="community" src="shots/community.webp" width="2000" height="1489" data-i18n-alt="a11y.shot.community"
+           alt="Claude settings showing Extra features: fonts, diff view modes and panel tabs." loading="lazy">
+    </div>
+    <p class="credit"><span data-i18n="extra.credit">Powered by</span> <a href="https://github.com/patrickjaja/claude-desktop-extra" target="_blank" rel="noopener">claude-desktop-extra</a></p>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span>© 2026 Suhun Han</span>
+  <span data-i18n="footer.disclaimer">Not affiliated with Anthropic or OpenAI.</span>
+  <span class="fineprint" data-i18n="footer.risk">Use at your own risk.</span>
+  <span class="footer-links">
+    <a id="source-link" href="#" data-i18n="footer.source">Source</a>
+    <a id="releases-link" href="#" data-i18n="footer.releases">Releases</a>
+  </span>
+</footer>
+
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
