@@ -126,6 +126,22 @@ final class AppModel {
 
     var isBusy: Bool { busyMessage != nil }
 
+    @ObservationIgnored private var launchLogged = false
+
+    private func logLaunchOnce() {
+        guard !launchLogged else { return }
+        launchLogged = true
+        let profiles = rows.map(\.profile)
+        Telemetry.log(TelemetryEvent(name: "app_launch", parameters: [
+            "claude_profiles": Telemetry.bucket(profiles.filter { $0.provider == .claude }.count),
+            "chatgpt_profiles": Telemetry.bucket(profiles.filter { $0.provider == .chatgpt }.count),
+            "extras_profiles": Telemetry.bucket(profiles.filter(\.usesExtras).count),
+            "computer_use_profiles": Telemetry.bucket(profiles.filter(\.usesComputerUseMode).count),
+            "claude_installed": String(officials[.claude] != nil),
+            "chatgpt_installed": String(officials[.chatgpt] != nil),
+        ]))
+    }
+
     func start() {
         Log.info("app.start", ["version": AppInfo.version])
         reloadAll()
@@ -192,6 +208,7 @@ final class AppModel {
                 break
             }
             refreshStorage()
+            logLaunchOnce()
         }
     }
 
@@ -232,7 +249,7 @@ final class AppModel {
         }
     }
 
-    private func perform(_ message: String, _ work: @escaping @Sendable (ProfileManager, @escaping @Sendable (BuildStep) -> Void) throws -> Void) {
+    private func perform(_ message: String, event: TelemetryEvent? = nil, _ work: @escaping @Sendable (ProfileManager, @escaping @Sendable (BuildStep) -> Void) throws -> Void) {
         guard !isBusy else { return }
         busyMessage = message
         let manager = manager
@@ -240,44 +257,53 @@ final class AppModel {
             Task { @MainActor [weak self] in self?.busyMessage = "\(message) — \(step.rawValue)…" }
         }
         Task {
-            let failure = await Task.detached(priority: .userInitiated) { () -> String? in
+            let failure = await Task.detached(priority: .userInitiated) { () -> (message: String, kind: String)? in
                 do {
                     try work(manager, progress)
                     return nil
                 } catch {
-                    return error.localizedDescription
+                    return (error.localizedDescription, Telemetry.kind(of: error))
                 }
             }.value
             busyMessage = nil
             if let failure {
-                Log.error("app.operation_failed", ["operation": message, "error": failure])
-                errorMessage = failure
+                Log.error("app.operation_failed", ["operation": message, "error": failure.message])
+                errorMessage = failure.message
+                if let event { Telemetry.recordFailure(operation: event.name, kind: failure.kind) }
+            } else if let event {
+                Telemetry.log(event)
             }
             reloadAll()
         }
     }
 
     func create(_ request: CreateProfileRequest) {
-        perform("Creating “\(request.provider.displayName) \(request.name)”") { manager, progress in
+        let event = TelemetryEvent(name: "profile_created", parameters: [
+            "provider": request.provider.rawValue,
+            "extras": String(request.provider == .claude && request.applyExtras),
+            "computer_use": String(request.computerUseMode),
+            "adopted": String(request.adoptDataDirectory != nil),
+        ])
+        perform("Creating “\(request.provider.displayName) \(request.name)”", event: event) { manager, progress in
             let profile = try manager.createProfile(request, progress: progress)
             Task { @MainActor [weak self] in self?.selection = .profile(profile.id) }
         }
     }
 
     func edit(_ profile: Profile, name: String, tint: ProfileTint, computerUseMode: Bool, applyExtras: Bool) {
-        perform("Updating “\(profile.displayName)”") { manager, progress in
+        perform("Updating “\(profile.displayName)”", event: TelemetryEvent(name: "profile_edited", parameters: ["provider": profile.provider.rawValue])) { manager, progress in
             _ = try manager.editProfile(id: profile.id, name: name, tint: tint, computerUseMode: computerUseMode, applyExtras: applyExtras, progress: progress)
         }
     }
 
     func rebuild(_ profile: Profile) {
-        perform("Rebuilding “\(profile.displayName)”") { manager, progress in
+        perform("Rebuilding “\(profile.displayName)”", event: TelemetryEvent(name: "profile_rebuilt", parameters: ["provider": profile.provider.rawValue])) { manager, progress in
             _ = try manager.rebuild(id: profile.id, progress: progress)
         }
     }
 
     func rebuildAndLaunch(_ row: ProfileRow) {
-        perform("Rebuilding “\(row.profile.displayName)”") { manager, progress in
+        perform("Rebuilding “\(row.profile.displayName)”", event: TelemetryEvent(name: "profile_rebuilt", parameters: ["provider": row.profile.provider.rawValue, "launch": "true"])) { manager, progress in
             _ = try manager.rebuild(id: row.profile.id, progress: progress)
             try manager.launch(id: row.profile.id)
         }
@@ -296,7 +322,7 @@ final class AppModel {
     }
 
     func delete(_ profile: Profile, policy: DeleteDataPolicy) {
-        perform("Deleting “\(profile.displayName)”") { manager, _ in
+        perform("Deleting “\(profile.displayName)”", event: TelemetryEvent(name: "profile_deleted", parameters: ["provider": profile.provider.rawValue])) { manager, _ in
             try manager.deleteProfile(id: profile.id, data: policy)
         }
     }
@@ -306,7 +332,7 @@ final class AppModel {
             activate(bundleIdentifier: row.profile.bundleIdentifier, appURL: app)
             return
         }
-        perform("Launching “\(row.profile.displayName)”") { manager, _ in
+        perform("Launching “\(row.profile.displayName)”", event: TelemetryEvent(name: "profile_launched", parameters: ["provider": row.profile.provider.rawValue])) { manager, _ in
             try manager.launch(id: row.profile.id)
         }
     }

@@ -22,14 +22,14 @@ log() { printf '[%s] INFO %s\n' "$(date '+%H:%M:%S')" "$*"; }
 [[ -n "$VERSION" ]] || { printf 'VERSION is empty\n' >&2; exit 1; }
 
 if [[ "$IDENTITY" == "-" ]]; then
-    SIGN_FLAGS=(--options runtime)
+    SIGN_FLAGS=()
     SIGN_KIND=adhoc
 else
     SIGN_FLAGS=(--options runtime --timestamp)
     SIGN_KIND=developer-id
 fi
 
-sign() { codesign --force --sign "$IDENTITY" "${SIGN_FLAGS[@]}" "$@"; }
+sign() { codesign --force --sign "$IDENTITY" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} "$@"; }
 
 log "building release binaries version=$VERSION build=$BUILD_NUMBER signing=$SIGN_KIND"
 swift build --package-path "$ROOT" -c release --arch arm64 --product BarracksApp
@@ -55,6 +55,12 @@ cp -Rf "$EXTRA_OUT" "$APP/Contents/Resources/Extra"
 
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__BUILD__/$BUILD_NUMBER/g" "$ROOT/Resources/Info.plist" > "$APP/Contents/Info.plist"
 "$BIN_DIR/barracks" icon "$APP/Contents/Resources/AppIcon.icns" --barracks
+if [[ -f "$ROOT/Resources/GoogleService-Info.plist" ]]; then
+    cp -f "$ROOT/Resources/GoogleService-Info.plist" "$APP/Contents/Resources/GoogleService-Info.plist"
+    log "firebase config bundled"
+else
+    log "firebase config absent; telemetry disabled in this build"
+fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 log "signing kind=$SIGN_KIND"

@@ -49,12 +49,23 @@ swift package --package-path "$ROOT" resolve >/dev/null
 KEYCHAIN_KEY="$("$SPARKLE_BIN/generate_keys" --account "$SPARKLE_ACCOUNT" -p 2>/dev/null | tail -1)"
 PLIST_KEY="$(plutil -extract SUPublicEDKey raw "$ROOT/Resources/Info.plist")"
 [[ -n "$KEYCHAIN_KEY" && "$KEYCHAIN_KEY" == "$PLIST_KEY" ]] || die "sparkle key mismatch account=$SPARKLE_ACCOUNT"
+FIREBASE_PLIST="$ROOT/Resources/GoogleService-Info.plist"
+[[ -f "$FIREBASE_PLIST" ]] || die "firebase config missing path=$FIREBASE_PLIST"
+[[ "$(plutil -extract BUNDLE_ID raw "$FIREBASE_PLIST")" == "$(plutil -extract CFBundleIdentifier raw "$ROOT/Resources/Info.plist")" ]] || die "firebase config bundle id mismatch"
+UPLOAD_SYMBOLS="$ROOT/.build/checkouts/firebase-ios-sdk/Crashlytics/upload-symbols"
 xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 || die "notary profile missing name=$NOTARY_PROFILE (run: xcrun notarytool store-credentials $NOTARY_PROFILE)"
 log "preflight ok identity=${IDENTITY:0:8} sparkle_account=$SPARKLE_ACCOUNT notary_profile=$NOTARY_PROFILE"
 
 BARRACKS_VERSION="$VERSION" BARRACKS_BUILD="$BUILD_NUMBER" BARRACKS_SIGN_IDENTITY="$IDENTITY" "$ROOT/scripts/build-app.sh"
 APP="$ROOT/build/$APP_NAME.app"
 [[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$VERSION" ]] || die "bundle version mismatch"
+[[ -f "$APP/Contents/Resources/GoogleService-Info.plist" ]] || die "firebase config not bundled"
+BIN_DIR="$(swift build --package-path "$ROOT" -c release --arch arm64 --show-bin-path)"
+DSYM="$BIN_DIR/BarracksApp.dSYM"
+APP_UUID="$(dwarfdump --uuid "$APP/Contents/MacOS/$APP_NAME" | awk '{print $2}')"
+DSYM_UUID="$(dwarfdump --uuid "$DSYM" | awk '{print $2}')"
+[[ -n "$APP_UUID" && "$APP_UUID" == "$DSYM_UUID" ]] || die "dsym uuid mismatch app=$APP_UUID dsym=$DSYM_UUID"
+log "dsym matched uuid=$APP_UUID"
 
 mkdir -p "$DIST"
 "$ROOT/scripts/make-dmg.sh" "$APP" "$DMG" "$APP_NAME"
@@ -102,6 +113,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     log "dry run stop before publishing dmg=$DMG zip=$ZIP"
     exit 0
 fi
+
+"$UPLOAD_SYMBOLS" -gsp "$FIREBASE_PLIST" -p mac -- "$DSYM"
+log "dsym uploaded uuid=$APP_UUID"
 
 FLAGS=(--target "$(git -C "$ROOT" rev-parse HEAD)" --title "$TAG" --notes-file "$NOTES")
 [[ "$PRERELEASE" -eq 1 ]] && FLAGS+=(--prerelease)

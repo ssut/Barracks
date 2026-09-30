@@ -8,8 +8,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.setActivationPolicy(.regular)
             NSApp.applicationIconImage = IconComposer.appImage(points: 256)
         }
+        Telemetry.start()
         NSApp.activate()
         ApplicationsMover.promptIfNeeded()
+        Telemetry.askIfNeeded()
         UpdateCoordinator.shared.start()
     }
 
@@ -40,6 +42,9 @@ struct BarracksApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { UpdateCoordinator.shared.checkForUpdates() }
+                if Telemetry.isAvailable {
+                    Toggle("Share Usage Data", isOn: Binding(get: { Telemetry.isEnabled }, set: { Telemetry.isEnabled = $0 }))
+                }
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Profile…") { model.beginNewProfile() }

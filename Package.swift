@@ -12,6 +12,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.4"),
+        .package(url: "https://github.com/firebase/firebase-ios-sdk", .upToNextMajor(from: "12.19.2")),
     ],
     targets: [
         .target(
@@ -25,7 +26,12 @@ let package = Package(
         ),
         .executableTarget(
             name: "BarracksApp",
-            dependencies: ["BarracksCore", .product(name: "Sparkle", package: "Sparkle")],
+            dependencies: [
+                "BarracksCore",
+                .product(name: "Sparkle", package: "Sparkle"),
+                .product(name: "FirebaseAnalytics", package: "firebase-ios-sdk"),
+                .product(name: "FirebaseCrashlytics", package: "firebase-ios-sdk"),
+            ],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .executableTarget(name: "BarracksCLI", dependencies: ["BarracksCore"]),
