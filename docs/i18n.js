@@ -1,13 +1,13 @@
 window.BARRACKS_I18N = {
   "meta.title": {
-    en: "Barracks — separate Claude & ChatGPT on one Mac",
-    ko: "Barracks — Claude·ChatGPT를 계정마다 따로",
-    ja: "Barracks — Claude・ChatGPT をアカウントごとに"
+    en: "Barracks — Run multiple Claude & ChatGPT accounts side by side on Mac",
+    ko: "Barracks — Mac에서 Claude·ChatGPT 계정 여러 개를 동시에",
+    ja: "Barracks — Mac で Claude・ChatGPT の複数アカウントを同時に"
   },
   "meta.description": {
-    en: "Separate Claude & ChatGPT profiles. Own login, own data. All at once.",
-    ko: "Claude·ChatGPT를 계정마다 따로 띄워 두고 동시에 쓰세요.",
-    ja: "Claude・ChatGPT をアカウントごとに分けて、同時に使えます。"
+    en: "Barracks runs multiple Claude and ChatGPT desktop apps side by side on one Mac. Give every account (work, personal, lab, clients) its own app with separate login, chats, settings and Claude Code config, a color-coded Dock icon, one-click rebuilds, automatic updates, and built-in Claude Extra themes and fonts. Notarized for Apple Silicon, macOS 14 and later.",
+    ko: "Barracks는 Mac 한 대에서 Claude·ChatGPT 데스크톱 앱을 계정마다 따로 띄워 동시에 쓰게 해 줘요. 업무용, 개인용, 실험용, 클라이언트용 계정이 각자 앱을 갖고 로그인·대화·설정·Claude Code 설정도 따로 가요. Dock 아이콘 색으로 구분하고, 앱이 업데이트되면 한 번에 다시 빌드하고, 자동 업데이트와 Claude Extra 테마·폰트까지 들어 있어요. Apple Silicon, macOS 14 이상, 공증된 앱.",
+    ja: "Barracks は、1 台の Mac で Claude と ChatGPT のデスクトップアプリをアカウントごとに分けて同時に使えるアプリです。仕事用・個人用・実験用・クライアント用など、アカウントごとにログイン、チャット、設定、Claude Code の設定まで別々。Dock アイコンの色で見分けられ、ワンクリックで再ビルド、自動アップデート、Claude Extra のテーマやフォントも内蔵。Apple Silicon、macOS 14 以降、公証済み。"
   },
   "a11y.skip": { en: "Skip to content", ko: "본문으로 건너뛰기", ja: "本文へスキップ" },
   "hero.before": {
