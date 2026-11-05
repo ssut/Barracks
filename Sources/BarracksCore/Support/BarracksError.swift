@@ -28,6 +28,7 @@ public enum BarracksError: Error, LocalizedError, Sendable, Equatable {
     case registryCorrupt(String)
     case lockUnavailable(String)
     case extraUnavailable(String)
+    case electronIntegrity(String)
 
     public var errorDescription: String? {
         switch self {
@@ -83,6 +84,8 @@ public enum BarracksError: Error, LocalizedError, Sendable, Equatable {
             "The profile list could not be read: \(reason)"
         case .extraUnavailable(let reason):
             reason
+        case .electronIntegrity(let reason):
+            "The app's built-in archive check could not be updated: \(reason)"
         case .lockUnavailable(let reason):
             "Another Barracks operation is in progress: \(reason)"
         }

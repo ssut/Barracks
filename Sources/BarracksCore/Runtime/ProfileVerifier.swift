@@ -66,6 +66,13 @@ public enum ProfileVerifier {
         } catch {
             report.failures.append("archive: \(error.localizedDescription)")
         }
+        do {
+            if let matches = try ElectronIntegrityDigest.matches(appURL: appURL) {
+                check("Electron archive digest matches Info.plist", matches)
+            }
+        } catch {
+            report.failures.append("electron archive digest: \(error.localizedDescription)")
+        }
 
         if profile.provider.usesLaunchWrapper {
             let wrapper = appURL.appending(path: "Contents/MacOS/\(AppProvider.launchWrapperName)")

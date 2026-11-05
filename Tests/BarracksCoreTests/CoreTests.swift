@@ -1,3 +1,4 @@
+import CryptoKit
 import CoreGraphics
 import Foundation
 import Testing
@@ -697,5 +698,134 @@ func scratchDirectory() throws -> URL {
             try ProfileBootstrap.checkSyntax(try written.readFile(path), label: path)
         }
         print("e2e claude=\(installation.version) generation=\(generation.id) files=\(replacements.count) jsc_unchecked=\(unchecked.joined(separator: ","))")
+    }
+}
+
+@Suite struct ElectronIntegrityDigestTests {
+    static let hashA = String(repeating: "a", count: 64)
+    static let hashB = String(repeating: "b", count: 64)
+
+    static func integrity(app: String) -> [String: Any] {
+        [
+            "Resources/ion-dist.asar": ["algorithm": "SHA256", "hash": hashB],
+            "Resources/app.asar": ["algorithm": "SHA256", "hash": app],
+        ]
+    }
+
+    static func slot(used: UInt8, version: UInt8, digest: Data) -> Data {
+        ElectronIntegrityDigest.sentinel + Data([used, version]) + digest
+    }
+
+    func makeApp(at appURL: URL, integrity: [String: Any]?, binary: Data?) throws {
+        let contents = appURL.appending(path: "Contents", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        var plist: [String: Any] = ["CFBundleIdentifier": "com.example.app"]
+        if let integrity { plist["ElectronAsarIntegrity"] = integrity }
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: contents.appending(path: "Info.plist"))
+        guard let binary else { return }
+        let framework = contents.appending(path: "Frameworks/Electron Framework.framework", directoryHint: .isDirectory)
+        let versionA = framework.appending(path: "Versions/A", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: versionA, withIntermediateDirectories: true)
+        try binary.write(to: versionA.appending(path: "Electron Framework"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: versionA.appending(path: "Electron Framework").path)
+        try FileManager.default.createSymbolicLink(atPath: framework.appending(path: "Versions/Current").path, withDestinationPath: "A")
+        try FileManager.default.createSymbolicLink(atPath: framework.appending(path: "Electron Framework").path, withDestinationPath: "Versions/Current/Electron Framework")
+    }
+
+    func setAppHash(_ hash: String, in appURL: URL) throws {
+        var doc = try PlistDocument.read(appURL.appending(path: "Contents/Info.plist"))
+        var integrity = doc.values["ElectronAsarIntegrity"] as? [String: Any] ?? [:]
+        integrity["Resources/app.asar"] = ["algorithm": "SHA256", "hash": hash]
+        doc.values["ElectronAsarIntegrity"] = integrity
+        try doc.write()
+    }
+
+    func pair(slots: (Data) -> Data) throws -> (root: URL, source: URL, staged: URL) {
+        let root = try scratchDirectory()
+        let source = root.appending(path: "Source.app", directoryHint: .isDirectory)
+        let digest = try ElectronIntegrityDigest.digest(of: Self.integrity(app: Self.hashA))
+        try makeApp(at: source, integrity: Self.integrity(app: Self.hashA), binary: slots(digest))
+        let staged = root.appending(path: "Staged.app", directoryHint: .isDirectory)
+        _ = try FileOps.cloneOrCopyTree(from: source, to: staged)
+        return (root, source, staged)
+    }
+
+    func storedDigests(_ appURL: URL) throws -> [Data] {
+        let binary = appURL.appending(path: "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework")
+        return ElectronIntegrityDigest.slots(in: try Data(contentsOf: binary)).map(\.digest)
+    }
+
+    @Test func digestFollowsElectronKeyOrderAndFields() throws {
+        let expected = Data(SHA256.hash(data: Data(("Resources/app.asar" + "SHA256" + Self.hashA + "Resources/ion-dist.asar" + "SHA256" + Self.hashB).utf8)))
+        #expect(try ElectronIntegrityDigest.digest(of: Self.integrity(app: Self.hashA)) == expected)
+    }
+
+    @Test func rewritesDigestInEverySlotAndLeavesOriginalAlone() throws {
+        let p = try pair { Data(repeating: 7, count: 100) + Self.slot(used: 1, version: 1, digest: $0) + Data(repeating: 9, count: 50) + Self.slot(used: 1, version: 1, digest: $0) + Data(repeating: 1, count: 10) }
+        defer { try? FileManager.default.removeItem(at: p.root) }
+        let original = try storedDigests(p.source)
+        try setAppHash(String(repeating: "c", count: 64), in: p.staged)
+        #expect(try ElectronIntegrityDigest.matches(appURL: p.staged) == false)
+        #expect(try ElectronIntegrityDigest.update(appURL: p.staged, sourceAppURL: p.source) == .updated)
+        let expected = try ElectronIntegrityDigest.digest(of: Self.integrity(app: String(repeating: "c", count: 64)))
+        #expect(try storedDigests(p.staged) == [expected, expected])
+        #expect(try storedDigests(p.source) == original)
+        #expect(try ElectronIntegrityDigest.matches(appURL: p.staged) == true)
+        #expect(try ElectronIntegrityDigest.matches(appURL: p.source) == true)
+        let mode = try FileManager.default.attributesOfItem(atPath: p.staged.appending(path: "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework").path)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o555)
+    }
+
+    @Test func leavesMatchingDigestUntouched() throws {
+        let p = try pair { Self.slot(used: 1, version: 1, digest: $0) }
+        defer { try? FileManager.default.removeItem(at: p.root) }
+        #expect(try ElectronIntegrityDigest.update(appURL: p.staged, sourceAppURL: p.source) == .unchanged)
+    }
+
+    @Test func skipsOlderElectronWithoutDigest() throws {
+        let none = try pair { _ in Data(repeating: 0, count: 64) }
+        defer { try? FileManager.default.removeItem(at: none.root) }
+        try setAppHash(String(repeating: "c", count: 64), in: none.staged)
+        #expect(try ElectronIntegrityDigest.update(appURL: none.staged, sourceAppURL: none.source) == .notPresent)
+        #expect(try ElectronIntegrityDigest.matches(appURL: none.staged) == nil)
+
+        let unused = try pair { _ in Self.slot(used: 0, version: 0, digest: Data(count: 32)) }
+        defer { try? FileManager.default.removeItem(at: unused.root) }
+        try setAppHash(String(repeating: "c", count: 64), in: unused.staged)
+        #expect(try ElectronIntegrityDigest.update(appURL: unused.staged, sourceAppURL: unused.source) == .unused)
+
+        let root = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bare = root.appending(path: "Bare.app", directoryHint: .isDirectory)
+        try makeApp(at: bare, integrity: nil, binary: nil)
+        #expect(try ElectronIntegrityDigest.update(appURL: bare, sourceAppURL: bare) == .notPresent)
+    }
+
+    @Test func refusesUnknownDigestFormats() throws {
+        let version = try pair { Self.slot(used: 1, version: 2, digest: $0) }
+        defer { try? FileManager.default.removeItem(at: version.root) }
+        try setAppHash(String(repeating: "c", count: 64), in: version.staged)
+        #expect(throws: BarracksError.self) { try ElectronIntegrityDigest.update(appURL: version.staged, sourceAppURL: version.source) }
+
+        let foreign = try pair { _ in Self.slot(used: 1, version: 1, digest: Data(repeating: 0xEE, count: 32)) }
+        defer { try? FileManager.default.removeItem(at: foreign.root) }
+        try setAppHash(String(repeating: "c", count: 64), in: foreign.staged)
+        #expect(throws: BarracksError.self) { try ElectronIntegrityDigest.update(appURL: foreign.staged, sourceAppURL: foreign.source) }
+        #expect(try storedDigests(foreign.staged) == [Data(repeating: 0xEE, count: 32)])
+    }
+
+    @Test func refusesFrameworkLinkLeavingTheApp() throws {
+        let root = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = root.appending(path: "Outside.app", directoryHint: .isDirectory)
+        let digest = try ElectronIntegrityDigest.digest(of: Self.integrity(app: Self.hashA))
+        try makeApp(at: outside, integrity: Self.integrity(app: Self.hashA), binary: Self.slot(used: 1, version: 1, digest: digest))
+        let staged = root.appending(path: "Staged.app", directoryHint: .isDirectory)
+        try makeApp(at: staged, integrity: Self.integrity(app: String(repeating: "c", count: 64)), binary: nil)
+        let framework = staged.appending(path: "Contents/Frameworks/Electron Framework.framework", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: framework, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: framework.appending(path: "Electron Framework").path, withDestinationPath: outside.appending(path: "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework").path)
+        #expect(throws: BarracksError.self) { try ElectronIntegrityDigest.update(appURL: staged, sourceAppURL: outside) }
+        #expect(try storedDigests(outside) == [digest])
     }
 }

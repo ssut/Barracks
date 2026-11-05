@@ -25,7 +25,7 @@ public struct BuildOutcome: Sendable {
 }
 
 public final class ProfileAppBuilder: Sendable {
-    public static let builderVersion = 6
+    public static let builderVersion = 7
 
     let paths: BarracksPaths
 
@@ -117,6 +117,8 @@ public final class ProfileAppBuilder: Sendable {
             booleansToSet: profile.provider.infoPlistBooleansToSet,
             renameBundle: profile.provider.renamesBundleName
         ), appURL: staged)
+        let integrityOutcome = try ElectronIntegrityDigest.update(appURL: staged, sourceAppURL: installation.appURL)
+        Log.info("build.electron_integrity", ["profile": profile.id.uuidString, "outcome": integrityOutcome.rawValue])
 
         var realExecutable: String?
         if profile.provider.usesLaunchWrapper {
