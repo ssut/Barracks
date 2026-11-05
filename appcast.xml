@@ -6,6 +6,21 @@
     <description>Most recent updates to Barracks</description>
     <language>en</language>
     <item>
+      <title>0.1.2</title>
+      <pubDate>Thu, 05 Nov 2026 00:52:29 +0000</pubDate>
+      <sparkle:version>202611050946</sparkle:version>
+      <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">- chore(release): bump version to 0.1.2
+- fix(build): keep Electron's embedded asar integrity digest in sync
+- fix(extra): support Claude 4.16336 with version-specific patch sets
+- feat(site): add designed OG image and full SEO metadata in three languages
+- ci(release): install pinned nim regex package before compiling Extra patchers
+- ci(release): run notarized releases on GitHub Actions</description>
+      <sparkle:fullReleaseNotesLink>https://github.com/ssut/Barracks/releases</sparkle:fullReleaseNotesLink>
+      <enclosure url="https://github.com/ssut/Barracks/releases/download/v0.1.2/Barracks-0.1.2.dmg" length="5665889" type="application/octet-stream" sparkle:edSignature="6R01YHPkWEExbFxlICZqsBT4cGGe7NaMcJmAeNUHv2uSti/GffzcRE0kApb/PpRHLp/jhjPCb9LLq9p2J98qAw==" />
+    </item>
+    <item>
       <title>0.1.1</title>
       <pubDate>Wed, 30 Sep 2026 02:50:13 +0000</pubDate>
       <sparkle:version>202609301149</sparkle:version>
