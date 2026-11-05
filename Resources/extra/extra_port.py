@@ -18,24 +18,6 @@ FONTS_ROW = '  function renderFontsRow(panel) {\n    if (!api || typeof api.font
 UPSTREAM_URL = "https://github.com/patrickjaja/claude-desktop-extra.git"
 WINDOW_CONTROLS_HOOK = ';(function(){var m="__cdbClaudeWorkMacWindowControls";if(globalThis[m])return;globalThis[m]=true;if(process.platform!=="darwin")return;try{var e=require("electron");e.app.on("browser-window-created",function(_event,w){try{w.webContents.once("did-finish-load",function(){try{if(w.webContents.getURL().indexOf("cdb-theme-picker")>=0)return;if(globalThis.__cdbNoWinCtl&&globalThis.__cdbNoWinCtl()&&typeof w.setWindowButtonVisibility==="function")w.setWindowButtonVisibility(false)}catch(x){console.warn("[Claude Work Extras] Window-control hook failed",x)}})}catch(x){console.warn("[Claude Work Extras] Window-control hook registration failed",x)}})}catch(x){console.warn("[Claude Work Extras] Window-control hook initialization failed",x)}})();'
 DEPLOYMENT_TARGET = "14.0"
-PINNED_COMMIT = "d5551098ceb87bf4effe8165f02e405a813a49ea"
-PATCHES = [
-    "core/add_feature_custom_themes",
-    "core/add_feature_extra_settings",
-    "core/add_feature_extra_settings_bridge",
-    "core/add_growthbook_overrides",
-    "core/fix_profile_window_title",
-    "community/add_feature_theme_picker",
-    "community/add_feature_cowork_glow",
-    "community/add_feature_diff_views",
-    "community/add_feature_diff_views_bridge",
-    "community/add_feature_files_quick_open",
-    "community/add_feature_files_quick_open_bridge",
-    "community/add_feature_files_quick_open_worker",
-    "community/add_feature_panel_tabs",
-    "community/add_feature_panel_tabs_bridge",
-    "community/add_feature_window_controls",
-]
 
 
 def log(level, message):
@@ -64,23 +46,25 @@ def sync_repository(support_root):
         run(["git", "init", "--quiet", str(repository)])
         run(["git", "-C", str(repository), "remote", "add", "origin", UPSTREAM_URL])
         log("INFO", "Initialized claude-desktop-extra source directory.")
-    present = subprocess.run(
-        ["git", "-C", str(repository), "cat-file", "-e", f"{PINNED_COMMIT}^{{commit}}"],
-        capture_output=True,
-    ).returncode == 0
-    if not present:
-        run(["git", "-C", str(repository), "fetch", "--quiet", "--depth=1", "origin", PINNED_COMMIT], capture_output=True)
-        log("INFO", f"Fetched pinned claude-desktop-extra commit {PINNED_COMMIT[:12]}.")
-    run(["git", "-C", str(repository), "checkout", "--quiet", "--force", "--detach", PINNED_COMMIT], capture_output=True)
-    run(["git", "-C", str(repository), "clean", "-fdxq"], capture_output=True)
-    commit = subprocess.check_output(
-        ["git", "-C", str(repository), "rev-parse", "HEAD"],
-        text=True,
-    ).strip()
-    if commit != PINNED_COMMIT:
-        raise RuntimeError(f"claude-desktop-extra is at {commit}, expected pinned {PINNED_COMMIT}")
-    log("INFO", f"Using pinned claude-desktop-extra {PINNED_COMMIT[:12]}.")
-    return commit
+    commits = []
+    for generation in GENERATIONS:
+        pinned = generation["commit"]
+        present = subprocess.run(
+            ["git", "-C", str(repository), "cat-file", "-e", f"{pinned}^{{commit}}"],
+            capture_output=True,
+        ).returncode == 0
+        if not present:
+            run(["git", "-C", str(repository), "fetch", "--quiet", "--depth=1", "origin", pinned], capture_output=True)
+            log("INFO", f"Fetched pinned claude-desktop-extra commit {pinned[:12]} for {generation['id']}.")
+        resolved = subprocess.check_output(
+            ["git", "-C", str(repository), "rev-parse", f"{pinned}^{{commit}}"],
+            text=True,
+        ).strip()
+        if resolved != pinned:
+            raise RuntimeError(f"claude-desktop-extra resolved {pinned} to {resolved}")
+        log("INFO", f"Using pinned claude-desktop-extra {pinned[:12]} for {generation['id']}.")
+        commits.append(resolved)
+    return commits
 
 
 def replace_text(path, old, new, expected=None):
@@ -99,7 +83,7 @@ def replace_regex(path, pattern, replacement, expected=1):
     path.write_text(updated)
 
 
-def adapt_sources(source):
+def adapt_claude_2_7032(source):
     replace_text(
         source / "patches/core/add_feature_custom_themes.nim",
         'if(process.platform!=="linux")return;',
@@ -224,7 +208,203 @@ def adapt_sources(source):
     replace_text(source / "js/files_quick_open_main.js", "Ctrl+P", "Command+P")
 
 
-def compile_patches(source):
+def adapt_claude_4_16336(source):
+    replace_text(
+        source / "patches/core/add_feature_custom_themes.nim",
+        'if(process.platform!=="linux")return;',
+        "",
+        1,
+    )
+    replace_text(
+        source / "patches/community/add_feature_theme_picker.nim",
+        'if(process.platform!=="linux")return;',
+        "",
+        1,
+    )
+    replace_text(
+        source / "patches/community/add_feature_theme_picker.nim",
+        "if(!input.control||!input.shift||input.alt||input.meta)return;",
+        "if((!input.control&&!input.meta)||!input.shift||input.alt)return;",
+        1,
+    )
+    replace_text(
+        source / "patches/community/add_feature_theme_picker.nim",
+        "Ctrl+Shift+T",
+        "Command+Shift+T",
+    )
+    replace_text(
+        source / "js/theme_picker_page.html",
+        "ev.ctrlKey && ev.shiftKey",
+        "(ev.ctrlKey || ev.metaKey) && ev.shiftKey",
+        1,
+    )
+    replace_text(
+        source / "js/theme_picker_page.html",
+        "<kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>T</kbd>",
+        "<kbd>Command</kbd><kbd>Shift</kbd><kbd>T</kbd>",
+        1,
+    )
+    replace_text(
+        source / "js/files_quick_open_page.js",
+        "if (!ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return;",
+        "if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.shiftKey) return;",
+        1,
+    )
+    replace_text(source / "js/files_quick_open_page.js", "Ctrl+P", "Command+P")
+    replace_text(
+        source / "js/panel_tabs_page.js",
+        "if (!enabled || !ev.ctrlKey || ev.altKey || ev.metaKey) return false;",
+        "if (!enabled || !(ev.ctrlKey || ev.metaKey) || ev.altKey) return false;",
+        1,
+    )
+    replace_text(source / "js/panel_tabs_page.js", "Ctrl+", "Command+")
+    replace_text(
+        source / "patches/core/fix_profile_window_title.nim",
+        '  let ctor = re2(r"(?:^|[^\\w$.])([\\w$]+)=" & escapeRe(factory) & r"\\(\\{")\n'
+        "  for m in s.findAll(ctor):\n"
+        "    let win = s[m.group(0)]\n"
+        "    let a = m.boundaries.b\n"
+        "    let b = min(s.len, a + PREVENT_CALL_WINDOW)\n",
+        '  let ctor = re2(r"(?:^|[^\\w$.])([\\w$]+)=([\\w$]+)\\(\\{")\n'
+        '  let wrapped = "}," & factory & ")"\n'
+        "  for m in s.findAll(ctor):\n"
+        "    let win = s[m.group(0)]\n"
+        "    let a = m.boundaries.b\n"
+        "    let b = min(s.len, a + PREVENT_CALL_WINDOW)\n"
+        "    if s[m.group(1)] != factory and s.find(wrapped, a, b - 1) < 0:\n"
+        "      continue\n",
+        1,
+    )
+    replace_text(
+        source / "js/extra_settings_main.js",
+        'if (typeof process === "undefined" || (process.platform !== "linux" && process.platform !== "win32")) return;',
+        'if (typeof process === "undefined") return;',
+        1,
+    )
+    for relative in (
+        "diff_views_main.js",
+        "files_quick_open_main.js",
+        "panel_tabs_main.js",
+        "window_controls_main.js",
+    ):
+        replace_text(
+            source / "js" / relative,
+            'if (typeof process === "undefined" || process.platform !== "linux") return;',
+            'if (typeof process === "undefined") return;',
+            1,
+        )
+    settings = source / "js/extra_settings_page.js"
+    replace_text(
+        settings,
+        'if (!window.claudeAppBindings || !api || typeof api.flagsCatalog !== "function") {',
+        'if (!api || typeof api.flagsCatalog !== "function") {',
+        1,
+    )
+    replace_text(settings, "Ctrl+Shift+T", "Command+Shift+T")
+    replace_text(settings, "Ctrl+P", "Command+P")
+    replace_text(
+        settings,
+        '  var WINDOWS_NAV = { models: true };\n'
+        '  if (/^Win/.test((typeof navigator !== "undefined" && navigator.platform) || "")) {\n'
+        '    NAV_ITEMS = NAV_ITEMS.filter(function (it) { return WINDOWS_NAV[it.kind] === true; });\n'
+        '  }\n',
+        '  var WINDOWS_NAV = { models: true };\n'
+        '  var MAC_NAV = { themes: true, features: true, flags: true };\n'
+        '  var NAV_PLATFORM = (typeof navigator !== "undefined" && navigator.platform) || "";\n'
+        '  if (/^Win/.test(NAV_PLATFORM)) {\n'
+        '    NAV_ITEMS = NAV_ITEMS.filter(function (it) { return WINDOWS_NAV[it.kind] === true; });\n'
+        '  } else if (/^Mac/.test(NAV_PLATFORM)) {\n'
+        '    NAV_ITEMS = NAV_ITEMS.filter(function (it) { return MAC_NAV[it.kind] === true; });\n'
+        '  }\n',
+        1,
+    )
+    replace_text(
+        settings,
+        "  var FEATURE_ROWS = [\n"
+        "    renderDiffViewsRow,\n"
+        "    renderPanelTabsRow,\n"
+        "    renderFilesQuickOpenRow,\n"
+        "    renderCustomModelsRow,\n"
+        "    renderAllowNonAnthropicModelsRow,\n"
+        "    renderAutoFixAuthorRow,\n"
+        "    renderAutoFixMergeReadyRow,\n"
+        "    renderAutoArchiveGraceRow,\n"
+        "    renderSessionStartAlwaysAllowRow,\n"
+        "    renderTranscriptLimitsRow,\n"
+        "    renderWindowControlsRow,\n"
+        "    renderNativeTitlebarRow,\n"
+        "    renderWindowTransparencyRow,\n"
+        "    renderTrayIconRow,\n"
+        "    renderThemePickerRow,\n"
+        "    renderDevToolsRow\n"
+        "  ];\n",
+        FONTS_ROW
+        + "  var FEATURE_ROWS = [\n"
+        "    renderFontsRow,\n"
+        "    renderDiffViewsRow,\n"
+        "    renderPanelTabsRow,\n"
+        "    renderFilesQuickOpenRow,\n"
+        "    renderWindowControlsRow,\n"
+        "    renderThemePickerRow\n"
+        "  ];\n",
+        1,
+    )
+    replace_regex(
+        settings,
+        r'      note: "Opens the main window with no frame.*?Desktop\.",\n      ariaLabel: "open the main window frameless, without window-control buttons or a shadow",',
+        '      note: "Hides the three macOS traffic-light buttons. The standard macOS frame and shadow stay in place. " +\n        "Restart the app to apply the setting.",\n      ariaLabel: "hide the macOS window controls",',
+    )
+    replace_text(
+        settings,
+        'return on ? "on - no window buttons, no frame" : "off - window buttons, integrated titlebar";',
+        'return on ? "on - traffic-light buttons hidden" : "off - standard macOS window controls shown";',
+        1,
+    )
+    replace_text(
+        settings,
+        '"Window controls hidden - restart Claude Desktop to open the window frameless"',
+        '"Window controls hidden - restart the app"',
+        1,
+    )
+    replace_text(
+        settings,
+        '"Window controls back - restart Claude Desktop to get the titlebar back"',
+        '"Window controls back - restart the app"',
+        1,
+    )
+    replace_text(
+        settings,
+        '    restart.title = "Relaunches the app directly, skipping your desktop launcher\'s systemd scope " +\n'
+        '      "and environment - quitting and reopening from the launcher is the cleanest way";\n',
+        '    restart.title = "Relaunches the app";\n',
+        1,
+    )
+    replace_text(
+        settings,
+        '      "Quitting Claude Desktop and reopening it from your desktop launcher is the cleanest way: " +\n'
+        '      "\\"Restart now\\" relaunches the app directly and so skips the launcher\'s systemd scope and environment."));\n',
+        '      "Use \\"Restart now\\" or quit and reopen the app."));\n',
+        1,
+    )
+    replace_text(
+        source / "js/extra_settings_main.js",
+        '    "cdb-extra:paths": function () {',
+        FONTS_HANDLERS + '    "cdb-extra:paths": function () {',
+        1,
+    )
+    replace_text(
+        source / "js/extra_settings_bridge.js",
+        "    // __cdb_extra_bridge\n    version: 1,\n",
+        "    // __cdb_extra_bridge\n    version: 1,\n" + FONTS_BRIDGE,
+        1,
+    )
+    replace_text(source / "js/extra_settings_main.js", "Ctrl+Shift+T", "Command+Shift+T")
+    replace_text(source / "js/extra_settings_bridge.js", "Ctrl+Shift+T", "Command+Shift+T")
+    replace_text(source / "js/extra_settings_bridge.js", "Ctrl+P", "Command+P")
+    replace_text(source / "js/files_quick_open_main.js", "Ctrl+P", "Command+P")
+
+
+def compile_patches(source, patches):
     for executable in ("nim", "nimble", "make", "xcrun"):
         if shutil.which(executable) is None:
             raise RuntimeError(f"Required build tool is unavailable: {executable}")
@@ -232,7 +412,7 @@ def compile_patches(source):
     if regex_path.returncode != 0:
         run(["nimble", "install", "-y", "regex"])
     sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
-    targets = [str(path) for path in PATCHES]
+    targets = [str(path) for path in patches]
     build = subprocess.run(
         ["make", "-C", str(source / "patches"), "-j4", *targets],
         text=True,
@@ -241,18 +421,67 @@ def compile_patches(source):
     )
     if build.returncode != 0:
         raise RuntimeError("Nim patch build failed:\n" + build.stdout + build.stderr)
-    log("INFO", f"Compiled {len(PATCHES)} feature patchers for macOS.")
+    log("INFO", f"Compiled {len(patches)} feature patchers for macOS from {source.name}.")
 
 
 HEADER_RE = re.compile(r"@patch-(target|type):\s*(\S+)")
-BUNDLE_FORMAT = 1
+BUNDLE_FORMAT = 2
+GENERATIONS = [
+    {
+        "id": "claude-4.16336",
+        "minimum_claude": "4.16336.0",
+        "commit": "adc0509f90a37427911a0de2cafb61ca62d39804",
+        "adapt": adapt_claude_4_16336,
+        "main_append": WINDOW_CONTROLS_HOOK + "\n" + FONTS_MAIN + "\n",
+        "patches": [
+            "core/add_feature_custom_themes",
+            "core/add_feature_extra_settings",
+            "core/add_feature_extra_settings_bridge",
+            "core/add_growthbook_overrides",
+            "core/fix_profile_window_title",
+            "community/add_feature_theme_picker",
+            "community/add_feature_diff_views",
+            "community/add_feature_diff_views_bridge",
+            "community/add_feature_files_quick_open",
+            "community/add_feature_files_quick_open_bridge",
+            "community/add_feature_files_quick_open_worker",
+            "community/add_feature_panel_tabs",
+            "community/add_feature_panel_tabs_bridge",
+            "community/add_feature_window_controls",
+        ],
+    },
+    {
+        "id": "claude-2.7032",
+        "minimum_claude": "0.0.0",
+        "commit": "d5551098ceb87bf4effe8165f02e405a813a49ea",
+        "adapt": adapt_claude_2_7032,
+        "main_append": WINDOW_CONTROLS_HOOK + "\n" + FONTS_MAIN + "\n",
+        "patches": [
+            "core/add_feature_custom_themes",
+            "core/add_feature_extra_settings",
+            "core/add_feature_extra_settings_bridge",
+            "core/add_growthbook_overrides",
+            "core/fix_profile_window_title",
+            "community/add_feature_theme_picker",
+            "community/add_feature_cowork_glow",
+            "community/add_feature_diff_views",
+            "community/add_feature_diff_views_bridge",
+            "community/add_feature_files_quick_open",
+            "community/add_feature_files_quick_open_bridge",
+            "community/add_feature_files_quick_open_worker",
+            "community/add_feature_panel_tabs",
+            "community/add_feature_panel_tabs_bridge",
+            "community/add_feature_window_controls",
+        ],
+    },
+]
 
 
-def extract_source(repository, workspace):
-    archive = workspace / "claude-desktop-extra.tar"
-    source = workspace / "claude-desktop-extra-macos"
+def extract_source(repository, commit, workspace, name):
+    archive = workspace / f"{name}.tar"
+    source = workspace / name
     with archive.open("wb") as target:
-        run(["git", "-C", str(repository), "archive", "--format=tar", "HEAD"], stdout=target)
+        run(["git", "-C", str(repository), "archive", "--format=tar", commit], stdout=target)
     source.mkdir()
     with tarfile.open(archive) as contents:
         if hasattr(tarfile, "data_filter"):
@@ -283,59 +512,76 @@ def patch_headers(path):
     return target
 
 
+def build_generation(generation, repository, workspace, staging):
+    started = datetime.datetime.now()
+    name = f"claude-desktop-extra-{generation['id']}"
+    source = extract_source(repository, generation["commit"], workspace, name)
+    generation["adapt"](source)
+    compile_patches(source, generation["patches"])
+    root = pathlib.PurePosixPath("generations") / generation["id"]
+    identity = os.environ.get("BARRACKS_SIGN_IDENTITY", "-")
+    flags = [] if identity == "-" else ["--options", "runtime", "--timestamp"]
+    entries = []
+    for relative in sorted(generation["patches"], key=lambda item: pathlib.PurePosixPath(item).name):
+        base = source / "patches" / relative
+        target = patch_headers(base.with_suffix(".nim"))
+        binary = root / "patches" / relative
+        destination = staging / binary
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(base, destination)
+        os.chmod(destination, 0o755)
+        run(["codesign", "--force", "--sign", identity, *flags, str(destination)], capture_output=True)
+        entries.append({
+            "name": pathlib.PurePosixPath(relative).name,
+            "binary": str(binary),
+            "target": target[len("app.asar.contents/"):],
+            "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+        })
+    for entry in entries:
+        build = subprocess.check_output(["vtool", "-show-build", str(staging / entry["binary"])], text=True)
+        found = re.search(r"minos (\S+)", build)
+        if not found or tuple(int(x) for x in found.group(1).split(".")) > tuple(int(x) for x in DEPLOYMENT_TARGET.split(".")):
+            raise RuntimeError(f"{entry['name']} targets macOS {found.group(1) if found else 'unknown'}, expected {DEPLOYMENT_TARGET}")
+    append = root / "main-append.js"
+    (staging / append).write_text(generation["main_append"])
+    seconds = (datetime.datetime.now() - started).total_seconds()
+    log("INFO", f"Built generation {generation['id']} from {generation['commit'][:12]} with {len(entries)} patches in {seconds:.1f}s.")
+    return {
+        "id": generation["id"],
+        "minimumClaudeVersion": generation["minimum_claude"],
+        "commit": generation["commit"],
+        "patches": entries,
+        "mainAppend": str(append),
+        "mainAppendSHA256": hashlib.sha256((staging / append).read_bytes()).hexdigest(),
+    }
+
+
 def bundle_mode(cache_root, out_dir):
     cache_root = pathlib.Path(cache_root).expanduser()
     out_dir = pathlib.Path(out_dir).expanduser()
-    commit = sync_repository(cache_root)
+    sync_repository(cache_root)
     workspace = pathlib.Path(tempfile.mkdtemp(prefix="barracks-extra-"))
     staging = out_dir.parent / f".{out_dir.name}.staging"
     try:
-        source = extract_source(cache_root / "claude-desktop-extra", workspace)
-        adapt_sources(source)
-        compile_patches(source)
         if staging.exists():
             shutil.rmtree(staging)
-        (staging / "patches").mkdir(parents=True)
-        entries = []
-        for relative in sorted(PATCHES, key=lambda item: pathlib.PurePosixPath(item).name):
-            base = source / "patches" / relative
-            target = patch_headers(base.with_suffix(".nim"))
-            destination = staging / "patches" / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(base, destination)
-            os.chmod(destination, 0o755)
-            identity = os.environ.get("BARRACKS_SIGN_IDENTITY", "-")
-            flags = [] if identity == "-" else ["--options", "runtime", "--timestamp"]
-            run(["codesign", "--force", "--sign", identity, *flags, str(destination)], capture_output=True)
-            entries.append({
-                "name": pathlib.PurePosixPath(relative).name,
-                "binary": f"patches/{relative}",
-                "target": target[len("app.asar.contents/"):],
-                "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
-            })
-        for entry in entries:
-            build = subprocess.check_output(["vtool", "-show-build", str(staging / entry["binary"])], text=True)
-            found = re.search(r"minos (\S+)", build)
-            if not found or tuple(int(x) for x in found.group(1).split(".")) > tuple(int(x) for x in DEPLOYMENT_TARGET.split(".")):
-                raise RuntimeError(f"{entry['name']} targets macOS {found.group(1) if found else 'unknown'}, expected {DEPLOYMENT_TARGET}")
-        (staging / "main-append.js").write_text(WINDOW_CONTROLS_HOOK + "\n" + FONTS_MAIN + "\n")
+        staging.mkdir(parents=True)
+        generations = [build_generation(generation, cache_root / "claude-desktop-extra", workspace, staging) for generation in GENERATIONS]
         manifest = {
             "format": BUNDLE_FORMAT,
             "signedBy": "adhoc" if os.environ.get("BARRACKS_SIGN_IDENTITY", "-") == "-" else "developer-id",
             "upstream": UPSTREAM_URL,
-            "commit": commit,
             "script": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
-            "patches": entries,
             "mainTarget": ".vite/build/index.js",
-            "mainAppend": "main-append.js",
-            "mainAppendSHA256": hashlib.sha256((staging / "main-append.js").read_bytes()).hexdigest(),
             "staleMarkers": ["__cdb", "__nav_spoof_applied"],
+            "generations": generations,
         }
         (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         if out_dir.exists():
             shutil.rmtree(out_dir)
         staging.rename(out_dir)
-        log("INFO", f"Wrote Extra bundle for {commit[:12]} with {len(entries)} patches to {out_dir}.")
+        summary = ", ".join(f"{g['id']}@{g['commit'][:12]} ({len(g['patches'])} patches, Claude >= {g['minimumClaudeVersion']})" for g in generations)
+        log("INFO", f"Wrote Extra bundle to {out_dir}: {summary}.")
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
         if staging.exists():
@@ -344,7 +590,7 @@ def bundle_mode(cache_root, out_dir):
 
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "sync":
-        print(sync_repository(sys.argv[2]))
+        print("\n".join(sync_repository(sys.argv[2])))
         return
     if len(sys.argv) == 4 and sys.argv[1] == "bundle":
         bundle_mode(sys.argv[2], sys.argv[3])

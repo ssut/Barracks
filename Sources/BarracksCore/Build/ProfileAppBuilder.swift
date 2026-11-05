@@ -77,7 +77,7 @@ public final class ProfileAppBuilder: Sendable {
             let base = try ExtraBuilder.base(for: installation, sourceSHA256: sourceSHA, paths: paths)
             try FileManager.default.removeItem(at: stagedAsar)
             try FileManager.default.copyItem(at: base, to: stagedAsar)
-            extraSignature = try ExtraBuilder.signature(sourceSHA256: sourceSHA)
+            extraSignature = try ExtraBuilder.signature(sourceSHA256: sourceSHA, claudeVersion: installation.version)
             Log.info("build.extra_applied", ["profile": profile.id.uuidString, "signature": extraSignature ?? ""])
         }
 

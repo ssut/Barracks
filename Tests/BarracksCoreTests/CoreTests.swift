@@ -451,8 +451,15 @@ func scratchDirectory() throws -> URL {
         Data("#!/bin/sh\nset -e\n\(body)\n".utf8)
     }
 
-    func fixture(index: String = "\"use strict\";require(\"./index.chunk-a1.js\");", patches: [(String, String, Data)]) throws -> Fixture {
-        let root = try scratchDirectory()
+    struct GenerationSpec {
+        var id: String
+        var minimum: String
+        var patches: [(String, String, Data)]
+    }
+
+    static let defaultIndex = "\"use strict\";require(\"./index.chunk-a1.js\");"
+
+    func archive(in root: URL, index: String) throws -> AsarArchive {
         let asar = root.appending(path: "app.asar")
         try AsarBuilder.build(files: [
             ".vite/build/index.js": Data(index.utf8),
@@ -460,26 +467,69 @@ func scratchDirectory() throws -> URL {
             ".vite/build/index.chunk-b2.js": Data("var two=2;".utf8),
             ".vite/build/mainView.js": Data("view();".utf8),
         ], to: asar)
-        let bundleRoot = root.appending(path: "Extra", directoryHint: .isDirectory)
+        return try AsarArchive.open(asar)
+    }
+
+    func writePatches(_ patches: [(String, String, Data)], under prefix: String, in bundleRoot: URL) throws -> [[String: Any]] {
         var entries: [[String: Any]] = []
         for (name, target, body) in patches {
-            let binary = bundleRoot.appending(path: "patches/core/\(name)")
+            let relative = "\(prefix)patches/core/\(name)"
+            let binary = bundleRoot.appending(path: relative)
             try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
             try body.write(to: binary)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
-            entries.append(["name": name, "binary": "patches/core/\(name)", "target": target, "sha256": Hashing.sha256Hex(body)])
+            entries.append(["name": name, "binary": relative, "target": target, "sha256": Hashing.sha256Hex(body)])
         }
-        let append = Data(";/*appended*/\n".utf8)
-        try append.write(to: bundleRoot.appending(path: "main-append.js"))
-        let manifest: [String: Any] = [
-            "format": 1, "upstream": "test", "commit": String(repeating: "d", count: 40), "script": "x",
-            "patches": entries, "mainTarget": ".vite/build/index.js", "mainAppend": "main-append.js",
-            "mainAppendSHA256": Hashing.sha256Hex(append), "staleMarkers": ["__cdb", "__nav_spoof_applied"],
-        ]
+        return entries
+    }
+
+    func finish(root: URL, archive: AsarArchive, bundleRoot: URL, manifest: [String: Any]) throws -> Fixture {
         try JSONSerialization.data(withJSONObject: manifest).write(to: bundleRoot.appending(path: "manifest.json"))
         let work = root.appending(path: "work", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        return Fixture(root: root, archive: try AsarArchive.open(asar), bundle: try ExtraBundle.load(root: bundleRoot), work: work)
+        return Fixture(root: root, archive: archive, bundle: try ExtraBundle.load(root: bundleRoot), work: work)
+    }
+
+    func fixture(index: String = defaultIndex, patches: [(String, String, Data)]) throws -> Fixture {
+        let root = try scratchDirectory()
+        let archive = try archive(in: root, index: index)
+        let bundleRoot = root.appending(path: "Extra", directoryHint: .isDirectory)
+        let entries = try writePatches(patches, under: "", in: bundleRoot)
+        let append = Data(";/*appended*/\n".utf8)
+        try append.write(to: bundleRoot.appending(path: "main-append.js"))
+        return try finish(root: root, archive: archive, bundleRoot: bundleRoot, manifest: [
+            "format": 1, "upstream": "test", "commit": String(repeating: "d", count: 40), "script": "x",
+            "patches": entries, "mainTarget": ".vite/build/index.js", "mainAppend": "main-append.js",
+            "mainAppendSHA256": Hashing.sha256Hex(append), "staleMarkers": ["__cdb", "__nav_spoof_applied"],
+        ])
+    }
+
+    func generationsFixture(index: String = defaultIndex, _ specs: [GenerationSpec], extra: [String: Any] = [:]) throws -> Fixture {
+        let root = try scratchDirectory()
+        let archive = try archive(in: root, index: index)
+        let bundleRoot = root.appending(path: "Extra", directoryHint: .isDirectory)
+        var generations: [[String: Any]] = []
+        for (position, spec) in specs.enumerated() {
+            let prefix = "generations/\(spec.id)/"
+            let entries = try writePatches(spec.patches, under: prefix, in: bundleRoot)
+            let append = Data(";/*appended-\(spec.id)*/\n".utf8)
+            try append.write(to: bundleRoot.appending(path: "\(prefix)main-append.js"))
+            generations.append([
+                "id": spec.id, "minimumClaudeVersion": spec.minimum,
+                "commit": String(repeating: String(position), count: 40), "patches": entries,
+                "mainAppend": "\(prefix)main-append.js", "mainAppendSHA256": Hashing.sha256Hex(append),
+            ])
+        }
+        var manifest: [String: Any] = [
+            "format": 2, "upstream": "test", "script": "x", "mainTarget": ".vite/build/index.js",
+            "staleMarkers": ["__cdb", "__nav_spoof_applied"], "generations": generations,
+        ]
+        manifest.merge(extra) { _, new in new }
+        return try finish(root: root, archive: archive, bundleRoot: bundleRoot, manifest: manifest)
+    }
+
+    func only(_ f: Fixture) throws -> [String: Data] {
+        try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, generation: f.bundle.generations[0], work: f.work)
     }
 
     @Test func patchesChunkedBundleAndAppendsStartupModule() throws {
@@ -488,7 +538,7 @@ func scratchDirectory() throws -> URL {
             ("p2", ".vite/build/mainView.js", Self.script("printf 'patched();' >> \"$1\"")),
         ])
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let replacements = try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work)
+        let replacements = try only(f)
         #expect(Set(replacements.keys) == [".vite/build/index.js", ".vite/build/index.chunk-b2.js", ".vite/build/mainView.js"])
         #expect(String(decoding: replacements[".vite/build/index.chunk-b2.js"]!, as: UTF8.self) == "var two=2;globalThis.__cdbT=1;")
         #expect(String(decoding: replacements[".vite/build/index.js"]!, as: UTF8.self).hasSuffix(";/*appended*/\n"))
@@ -505,25 +555,25 @@ func scratchDirectory() throws -> URL {
             ("p1", ".vite/build/index.js", Self.script("true")),
         ])
         defer { try? FileManager.default.removeItem(at: f.root) }
-        #expect(throws: BarracksError.self) { try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work) }
+        #expect(throws: BarracksError.self) { try only(f) }
     }
 
     @Test func failsWhenPatchDoesNotFit() throws {
         let f = try fixture(patches: [("p1", ".vite/build/index.js", Self.script("exit 3"))])
         defer { try? FileManager.default.removeItem(at: f.root) }
-        #expect(throws: BarracksError.self) { try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work) }
+        #expect(throws: BarracksError.self) { try only(f) }
     }
 
     @Test func failsWhenPatchBreaksChunkMarkers() throws {
         let f = try fixture(patches: [("p1", ".vite/build/index.js", Self.script("printf 'x' > \"$1\""))])
         defer { try? FileManager.default.removeItem(at: f.root) }
-        #expect(throws: BarracksError.self) { try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work) }
+        #expect(throws: BarracksError.self) { try only(f) }
     }
 
     @Test func failsOnCrossChunkLocalIdentifier() throws {
         let f = try fixture(patches: [("p1", ".vite/build/index.js", Self.script("printf 'var __cdbLocal=1;' | cat - \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\" && printf '__cdbLocal();' >> \"$1\""))])
         defer { try? FileManager.default.removeItem(at: f.root) }
-        #expect(throws: BarracksError.self) { try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, work: f.work) }
+        #expect(throws: BarracksError.self) { try only(f) }
     }
 
     @Test func rejectsTamperedPatchBinary() throws {
@@ -531,5 +581,121 @@ func scratchDirectory() throws -> URL {
         defer { try? FileManager.default.removeItem(at: f.root) }
         try Self.script("echo evil").write(to: f.bundle.root.appending(path: "patches/core/p1"))
         #expect(throws: BarracksError.self) { try ExtraBundle.load(root: f.bundle.root) }
+    }
+
+    static let ok = script("printf 'globalThis.__cdbT=1;' >> \"$1\"")
+    static let misfit = script("exit 3")
+
+    func twoGenerations(newer: Data = ok, older: Data = ok) throws -> Fixture {
+        try generationsFixture([
+            GenerationSpec(id: "claude-2.7032", minimum: "0.0.0", patches: [("p1", ".vite/build/index.js", older)]),
+            GenerationSpec(id: "claude-4.16336", minimum: "4.16336.0", patches: [("p1", ".vite/build/index.js", newer)]),
+        ])
+    }
+
+    @Test func comparesClaudeVersionsNumerically() {
+        #expect(ClaudeVersion("4.16336.0")! > ClaudeVersion("4.4212.0")!)
+        #expect(ClaudeVersion("2.42304.2")! < ClaudeVersion("3.0.0")!)
+        #expect(ClaudeVersion("4.16336")! == ClaudeVersion("4.16336.0")!)
+        #expect(ClaudeVersion(" 4.1 ") != nil)
+        #expect(ClaudeVersion("") == nil)
+        #expect(ClaudeVersion("4..1") == nil)
+        #expect(ClaudeVersion("4.1-beta") == nil)
+        #expect(ClaudeVersion("４.1") == nil)
+    }
+
+    @Test func picksPatchSetByClaudeVersion() throws {
+        let f = try twoGenerations()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let order = { (version: String) in f.bundle.generations(forClaudeVersion: version).map(\.id) }
+        #expect(order("4.16336.0") == ["claude-4.16336", "claude-2.7032"])
+        #expect(order("4.16336") == ["claude-4.16336", "claude-2.7032"])
+        #expect(order("5.1.0") == ["claude-4.16336", "claude-2.7032"])
+        #expect(order("4.4212.0") == ["claude-2.7032", "claude-4.16336"])
+        #expect(order("2.42304.2") == ["claude-2.7032", "claude-4.16336"])
+        #expect(order("not-a-version") == ["claude-4.16336", "claude-2.7032"])
+    }
+
+    @Test func signatureFollowsPreferredPatchSet() throws {
+        let f = try twoGenerations()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let sha = String(repeating: "a", count: 64)
+        let newer = ExtraBuilder.signature(sourceSHA256: sha, claudeVersion: "4.16336.0", bundle: f.bundle)
+        let older = ExtraBuilder.signature(sourceSHA256: sha, claudeVersion: "2.42304.2", bundle: f.bundle)
+        #expect(newer != older)
+        #expect(newer == ExtraBuilder.signature(sourceSHA256: sha, claudeVersion: "4.20000.1", bundle: f.bundle))
+        #expect(older == ExtraBuilder.signature(sourceSHA256: sha, claudeVersion: "2.9939.4", bundle: f.bundle))
+    }
+
+    @Test func appliesPreferredPatchSetAndItsStartupModule() throws {
+        let f = try twoGenerations()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let (generation, replacements) = try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, candidates: f.bundle.generations(forClaudeVersion: "4.16336.0"), work: f.work)
+        #expect(generation.id == "claude-4.16336")
+        #expect(String(decoding: replacements[".vite/build/index.js"]!, as: UTF8.self).hasSuffix(";/*appended-claude-4.16336*/\n"))
+    }
+
+    @Test func fallsBackToNextPatchSetWhenPreferredDoesNotFit() throws {
+        let f = try twoGenerations(newer: Self.ok, older: Self.misfit)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let (generation, replacements) = try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, candidates: f.bundle.generations(forClaudeVersion: "4.4212.0"), work: f.work)
+        #expect(generation.id == "claude-4.16336")
+        #expect(String(decoding: replacements[".vite/build/index.js"]!, as: UTF8.self).hasSuffix(";/*appended-claude-4.16336*/\n"))
+    }
+
+    @Test func reportsPreferredFailureWhenNoPatchSetFits() throws {
+        let f = try twoGenerations(newer: Self.misfit, older: Self.script("exit 4"))
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        do {
+            _ = try ExtraBuilder.patchedFiles(archive: f.archive, bundle: f.bundle, candidates: f.bundle.generations(forClaudeVersion: "4.16336.0"), work: f.work)
+            Issue.record("expected every patch set to be rejected")
+        } catch {
+            #expect(error.localizedDescription.contains("exit 3"))
+        }
+    }
+
+    @Test func readsLegacySinglePatchSetManifest() throws {
+        let f = try fixture(patches: [("p1", ".vite/build/index.js", Self.ok)])
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        #expect(f.bundle.generations.count == 1)
+        #expect(f.bundle.preferredGeneration(forClaudeVersion: "4.16336.0").id == String(repeating: "d", count: 12))
+        #expect(f.bundle.preferredGeneration(forClaudeVersion: "garbage").id == String(repeating: "d", count: 12))
+    }
+
+    @Test func rejectsInvalidPatchSetManifests() throws {
+        let spec = GenerationSpec(id: "claude-4.16336", minimum: "4.16336.0", patches: [("p1", ".vite/build/index.js", Self.ok)])
+        #expect(throws: (any Error).self) { try generationsFixture([spec], extra: ["format": 3]) }
+        #expect(throws: (any Error).self) { try generationsFixture([spec, spec]) }
+        #expect(throws: (any Error).self) { try generationsFixture([GenerationSpec(id: "x", minimum: "4.x", patches: spec.patches)]) }
+        #expect(throws: (any Error).self) { try generationsFixture([GenerationSpec(id: "x", minimum: "4.0", patches: [])]) }
+        #expect(throws: (any Error).self) { try generationsFixture([]) }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["BARRACKS_EXTRA_E2E_BUNDLE"] != nil))
+    func patchesInstalledClaude() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let bundle = try ExtraBundle.load(root: URL(filePath: environment["BARRACKS_EXTRA_E2E_BUNDLE"]!, directoryHint: .isDirectory))
+        let app = URL(filePath: environment["BARRACKS_EXTRA_E2E_APP"] ?? "/Applications/Claude.app", directoryHint: .isDirectory)
+        let installation = try AppLocator.inspect(app, provider: .claude)
+        let root = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archive = try AsarArchive.open(installation.asarURL)
+        let candidates = bundle.generations(forClaudeVersion: installation.version)
+        let (generation, replacements) = try ExtraBuilder.patchedFiles(archive: archive, bundle: bundle, candidates: candidates, work: root)
+        #expect(generation.id == candidates[0].id)
+        let output = root.appending(path: "app.asar")
+        _ = try archive.write(to: output, replacing: replacements)
+        let written = try AsarArchive.open(output)
+        var unchecked: [String] = []
+        for path in replacements.keys.sorted() {
+            #expect(try written.verifyIntegrity(of: path))
+            guard path.hasSuffix(".js") else { continue }
+            guard (try? ProfileBootstrap.checkSyntax(try archive.readFile(path), label: path)) != nil else {
+                unchecked.append(path)
+                continue
+            }
+            try ProfileBootstrap.checkSyntax(try written.readFile(path), label: path)
+        }
+        print("e2e claude=\(installation.version) generation=\(generation.id) files=\(replacements.count) jsc_unchecked=\(unchecked.joined(separator: ","))")
     }
 }

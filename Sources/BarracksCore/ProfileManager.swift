@@ -454,7 +454,7 @@ public final class ProfileManager: Sendable {
         guard let sha = try? FingerprintCache.shared.sha256(for: installation) else { return .current }
         if sha != build.sourceAsarSHA256 { return .sourceChanged }
         if profile.provider == .claude && !profile.usesComputerUseMode {
-            let expected = profile.usesExtras ? try? ExtraBuilder.signature(sourceSHA256: sha) : nil
+            let expected = profile.usesExtras ? try? ExtraBuilder.signature(sourceSHA256: sha, claudeVersion: installation.version) : nil
             if profile.usesExtras, let expected, build.extraSignature != expected { return .extraChanged }
             if !profile.usesExtras, build.extraSignature != nil { return .extraChanged }
         }
