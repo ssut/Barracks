@@ -15,6 +15,85 @@ FONTS_HANDLERS = '    "cdb-fonts:read": function () {\n      var f = globalThis.
 FONTS_BRIDGE = '    fontsRead: function () {\n      return ipcRenderer.invoke("cdb-fonts:read");\n    },\n    fontsSet: function (ui, code) {\n      return ipcRenderer.invoke("cdb-fonts:set", ui === null ? null : String(ui || ""), code === null ? null : String(code || ""));\n    },\n'
 FONTS_ROW = '  function renderFontsRow(panel) {\n    if (!api || typeof api.fontsRead !== "function" || typeof api.fontsSet !== "function") return;\n    var spec = { section: "Typography", title: "Fonts", note: "UI and code fonts. Comma-separated fallbacks. Empty keeps Claude\'s font. Applies live." };\n\n    var head = el("div", "cdbx-sec-h");\n    head.appendChild(el("span", "cdbx-sec-t", spec.section));\n    panel.appendChild(head);\n\n    var host = el("div", "cdbx-list");\n    var node = el("div", "cdbx-row");\n    var main = el("div", "cdbx-row-main");\n    main.appendChild(el("div", "cdbx-id", spec.title));\n    main.appendChild(el("div", "cdbx-note", spec.note));\n\n    function field(label) {\n      var wrap = el("div", "cdbx-state");\n      wrap.style.display = "flex";\n      wrap.style.alignItems = "center";\n      wrap.style.gap = "8px";\n      var caption = el("span", null, label);\n      caption.style.minWidth = "36px";\n      var input = el("input", "cdbx-input");\n      input.type = "text";\n      input.spellcheck = false;\n      input.autocomplete = "off";\n      input.style.flex = "1 1 auto";\n      input.style.maxWidth = "320px";\n      input.setAttribute("aria-label", label + " font");\n      input.disabled = true;\n      wrap.appendChild(caption);\n      wrap.appendChild(input);\n      main.appendChild(wrap);\n      return input;\n    }\n\n    var uiInput = field("UI");\n    var codeInput = field("Code");\n    var stateLine = el("div", "cdbx-state", "Loading...");\n    main.appendChild(stateLine);\n    node.appendChild(main);\n\n    var aside = el("div", "cdbx-row-aside");\n    var applyBtn = el("button", "cdbx-btn", "Apply");\n    applyBtn.type = "button";\n    applyBtn.disabled = true;\n    var resetBtn = el("button", "cdbx-btn", "Reset");\n    resetBtn.type = "button";\n    resetBtn.disabled = true;\n    aside.appendChild(applyBtn);\n    aside.appendChild(resetBtn);\n    node.appendChild(aside);\n    host.appendChild(node);\n    panel.appendChild(host);\n\n    var defaults = { ui: "", code: "" };\n\n    function describe(ui, code) {\n      return "UI: " + (ui || "Claude default") + " - Code: " + (code || "Claude default");\n    }\n\n    function show(res) {\n      uiInput.value = res.ui || "";\n      codeInput.value = res.code || "";\n      uiInput.placeholder = defaults.ui || "Claude default";\n      codeInput.placeholder = defaults.code || "Claude default";\n      stateLine.textContent = describe(res.ui, res.code);\n    }\n\n    function busy(on) {\n      uiInput.disabled = on;\n      codeInput.disabled = on;\n      applyBtn.disabled = on;\n      resetBtn.disabled = on;\n    }\n\n    function submit(ui, code) {\n      busy(true);\n      api.fontsSet(ui, code).then(function (r) {\n        busy(false);\n        if (failed(r)) { toast("Could not change the fonts: " + reason(r), true); return; }\n        show(r);\n        node.classList.add("cdbx-flash");\n        setTimeout(function () { node.classList.remove("cdbx-flash"); }, 700);\n        toast("Fonts applied in " + r.windows + " window(s)");\n      }, function (err) {\n        busy(false);\n        toast("Could not change the fonts: " + (err && err.message ? err.message : String(err)), true);\n      });\n    }\n\n    api.fontsRead().then(function (res) {\n      if (failed(res)) {\n        stateLine.textContent = "Unavailable: " + reason(res);\n        return;\n      }\n      defaults = res.defaults || defaults;\n      show(res);\n      if (res.lockedByJsonc) {\n        stateLine.textContent = describe(res.ui, res.code) + " - set in claude-desktop-extra.jsonc";\n        return;\n      }\n      busy(false);\n      applyBtn.addEventListener("click", function () { submit(uiInput.value, codeInput.value); });\n      resetBtn.addEventListener("click", function () { submit(null, null); });\n      [uiInput, codeInput].forEach(function (input) {\n        input.addEventListener("keydown", function (ev) {\n          if (ev.key === "Enter") { ev.preventDefault(); submit(uiInput.value, codeInput.value); }\n        });\n      });\n    }, function (err) {\n      stateLine.textContent = "Unavailable: " + (err && err.message ? err.message : String(err));\n    });\n\n    return { head: head, host: host, spec: spec };\n  }\n\n'
 
+TITLE_PATCH_6_6395 = r'''# @patch-target: app.asar.contents/.vite/build/index.js
+# @patch-type: nim
+
+import std/[os, strformat, strutils]
+import regex
+
+const SENTINEL = "__cdb_titleHook"
+const CONSTRUCTION_WINDOW = 12000
+const PREVENT_HELPER =
+  re2(r"function ([\w$]+)\(([\w$]+)\)\{([\w$]+)\.on\([""`]page-title-updated[""`],\(?([\w$]+)\)?=>\{?([\w$]+)\.preventDefault\(\)\}?\)\)\}")
+
+proc isIdentChar(c: char): bool =
+  c in {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_', '$'}
+
+proc assignedNear(s, win: string, a, b: int): bool =
+  let needle = win & "="
+  var i = s.find(needle, a)
+  while i >= 0 and i < b:
+    let before = i == 0 or not (isIdentChar(s[i - 1]) or s[i - 1] == '.')
+    let after = i + needle.len < s.len and s[i + needle.len] notin {'=', '>'}
+    if before and after:
+      return true
+    i = s.find(needle, i + 1)
+  false
+
+proc apply*(input: string): string =
+  result = input
+  if SENTINEL in result:
+    echo "  [PASS] No changes needed (already patched)"
+    return
+  var helpers: seq[string]
+  for m in result.findAll(PREVENT_HELPER):
+    if result[m.group(1)] == result[m.group(2)] and result[m.group(3)] == result[m.group(4)]:
+      helpers.add result[m.group(0)]
+  if helpers.len != 1:
+    echo &"  [FAIL] page-title-updated preventDefault helper: {helpers.len} matches, expected 1"
+    quit(1)
+  let call = re2(r"[^\w$.]" & escapeRe(helpers[0]) & r"\(([\w$]+)\)")
+  var sites: seq[tuple[a, b: int, win: string]]
+  for m in result.findAll(call):
+    let a = m.boundaries.a
+    if a >= 8 and result[a - 8 .. a] == "function ":
+      continue
+    sites.add (a: a + 1, b: m.boundaries.b, win: result[m.group(0)])
+  if sites.len != 1:
+    echo &"  [FAIL] main-window title lock call: {sites.len} matches, expected 1"
+    quit(1)
+  let site = sites[0]
+  let floor = max(0, site.a - CONSTRUCTION_WINDOW)
+  if result.find(".BrowserWindow(", floor, site.a) < 0 or not result.assignedNear(site.win, floor, site.a):
+    echo "  [FAIL] main-window construction not found before the title lock call"
+    quit(1)
+  let hook =
+    "(" & result[site.a .. site.b] & ",process.env.CLAUDE_PROFILE&&((globalThis." & SENTINEL &
+    "=true),((__cdb_w,__cdb_s)=>{const __cdb_o=__cdb_w.setTitle.bind(__cdb_w);" &
+    "__cdb_w.setTitle=(__cdb_t)=>{__cdb_t=String(__cdb_t??\"\");" &
+    "return __cdb_o(__cdb_t.endsWith(__cdb_s)?__cdb_t:__cdb_t+__cdb_s)};" &
+    "__cdb_w.setTitle(__cdb_w.getTitle())})(" & site.win &
+    ",\" (\"+process.env.CLAUDE_PROFILE+\")\")),void 0)"
+  result = result[0 ..< site.a] & hook & result[site.b + 1 .. ^1]
+  echo "  [OK] Main window title hook injected at the title lock call"
+
+when isMainModule:
+  if paramCount() != 1:
+    echo "Usage: fix_profile_window_title <file>"
+    quit(1)
+  let filePath = paramStr(1)
+  echo "=== Patch: fix_profile_window_title ==="
+  echo "  Target: " & filePath
+  if not fileExists(filePath):
+    echo "  [FAIL] File not found: " & filePath
+    quit(1)
+  let input = readFile(filePath)
+  let output = apply(input)
+  if output != input:
+    writeFile(filePath, output)
+    echo "  [PASS] Profile window title hook installed"
+'''
+
 UPSTREAM_URL = "https://github.com/patrickjaja/claude-desktop-extra.git"
 WINDOW_CONTROLS_HOOK = ';(function(){var m="__cdbClaudeWorkMacWindowControls";if(globalThis[m])return;globalThis[m]=true;if(process.platform!=="darwin")return;try{var e=require("electron");e.app.on("browser-window-created",function(_event,w){try{w.webContents.once("did-finish-load",function(){try{if(w.webContents.getURL().indexOf("cdb-theme-picker")>=0)return;if(globalThis.__cdbNoWinCtl&&globalThis.__cdbNoWinCtl()&&typeof w.setWindowButtonVisibility==="function")w.setWindowButtonVisibility(false)}catch(x){console.warn("[Claude Work Extras] Window-control hook failed",x)}})}catch(x){console.warn("[Claude Work Extras] Window-control hook registration failed",x)}})}catch(x){console.warn("[Claude Work Extras] Window-control hook initialization failed",x)}})();'
 DEPLOYMENT_TARGET = "14.0"
@@ -404,6 +483,17 @@ def adapt_claude_4_16336(source):
     replace_text(source / "js/files_quick_open_main.js", "Ctrl+P", "Command+P")
 
 
+def adapt_claude_6_6395(source):
+    adapt_claude_4_16336(source)
+    replace_text(
+        source / "patches/core/add_growthbook_overrides.nim",
+        r"(function [\w$]+\(([\w$]+),[\w$]+\)\{[\w$]+=[\w$]+;(?:const|let|var) ",
+        r"(function [\w$]+\(([\w$]+)(?:,[\w$]+(?:=[\w$]+)?)+\)\{[\w$]+=[\w$]+(?:,[\w$]+=[\w$]+)*;(?:const|let|var) ",
+        1,
+    )
+    (source / "patches/core/fix_profile_window_title.nim").write_text(TITLE_PATCH_6_6395)
+
+
 def compile_patches(source, patches):
     for executable in ("nim", "nimble", "make", "xcrun"):
         if shutil.which(executable) is None:
@@ -427,6 +517,29 @@ def compile_patches(source, patches):
 HEADER_RE = re.compile(r"@patch-(target|type):\s*(\S+)")
 BUNDLE_FORMAT = 2
 GENERATIONS = [
+    {
+        "id": "claude-6.6395",
+        "minimum_claude": "6.6395.0",
+        "commit": "adc0509f90a37427911a0de2cafb61ca62d39804",
+        "adapt": adapt_claude_6_6395,
+        "main_append": WINDOW_CONTROLS_HOOK + "\n" + FONTS_MAIN + "\n",
+        "patches": [
+            "core/add_feature_custom_themes",
+            "core/add_feature_extra_settings",
+            "core/add_feature_extra_settings_bridge",
+            "core/add_growthbook_overrides",
+            "core/fix_profile_window_title",
+            "community/add_feature_theme_picker",
+            "community/add_feature_diff_views",
+            "community/add_feature_diff_views_bridge",
+            "community/add_feature_files_quick_open",
+            "community/add_feature_files_quick_open_bridge",
+            "community/add_feature_files_quick_open_worker",
+            "community/add_feature_panel_tabs",
+            "community/add_feature_panel_tabs_bridge",
+            "community/add_feature_window_controls",
+        ],
+    },
     {
         "id": "claude-4.16336",
         "minimum_claude": "4.16336.0",
