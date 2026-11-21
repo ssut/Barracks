@@ -127,22 +127,24 @@ def sync_repository(support_root):
         log("INFO", "Initialized claude-desktop-extra source directory.")
     commits = []
     for generation in GENERATIONS:
-        pinned = generation["commit"]
-        present = subprocess.run(
-            ["git", "-C", str(repository), "cat-file", "-e", f"{pinned}^{{commit}}"],
-            capture_output=True,
-        ).returncode == 0
-        if not present:
-            run(["git", "-C", str(repository), "fetch", "--quiet", "--depth=1", "origin", pinned], capture_output=True)
-            log("INFO", f"Fetched pinned claude-desktop-extra commit {pinned[:12]} for {generation['id']}.")
-        resolved = subprocess.check_output(
-            ["git", "-C", str(repository), "rev-parse", f"{pinned}^{{commit}}"],
-            text=True,
-        ).strip()
-        if resolved != pinned:
-            raise RuntimeError(f"claude-desktop-extra resolved {pinned} to {resolved}")
-        log("INFO", f"Using pinned claude-desktop-extra {pinned[:12]} for {generation['id']}.")
-        commits.append(resolved)
+        pins = [("base", generation["commit"])] + [("overlay", overlay["commit"]) for overlay in generation.get("overlays", [])]
+        for role, pinned in pins:
+            present = subprocess.run(
+                ["git", "-C", str(repository), "cat-file", "-e", f"{pinned}^{{commit}}"],
+                capture_output=True,
+            ).returncode == 0
+            if not present:
+                run(["git", "-C", str(repository), "fetch", "--quiet", "--depth=1", "origin", pinned], capture_output=True)
+                log("INFO", f"Fetched pinned claude-desktop-extra {role} commit {pinned[:12]} for {generation['id']}.")
+            resolved = subprocess.check_output(
+                ["git", "-C", str(repository), "rev-parse", f"{pinned}^{{commit}}"],
+                text=True,
+            ).strip()
+            if resolved != pinned:
+                raise RuntimeError(f"claude-desktop-extra resolved {pinned} to {resolved}")
+            log("INFO", f"Using pinned claude-desktop-extra {role} {pinned[:12]} for {generation['id']}.")
+            if resolved not in commits:
+                commits.append(resolved)
     return commits
 
 
@@ -518,6 +520,38 @@ HEADER_RE = re.compile(r"@patch-(target|type):\s*(\S+)")
 BUNDLE_FORMAT = 2
 GENERATIONS = [
     {
+        "id": "claude-6.28899",
+        "minimum_claude": "6.28899.0",
+        "commit": "adc0509f90a37427911a0de2cafb61ca62d39804",
+        "overlays": [
+            {
+                "commit": "87c821c4dffa77563202abd3b8589802ca0865de",
+                "paths": [
+                    "js/files_quick_open_worker.js",
+                    "patches/community/add_feature_files_quick_open_worker.nim",
+                ],
+            },
+        ],
+        "adapt": adapt_claude_6_6395,
+        "main_append": WINDOW_CONTROLS_HOOK + "\n" + FONTS_MAIN + "\n",
+        "patches": [
+            "core/add_feature_custom_themes",
+            "core/add_feature_extra_settings",
+            "core/add_feature_extra_settings_bridge",
+            "core/add_growthbook_overrides",
+            "core/fix_profile_window_title",
+            "community/add_feature_theme_picker",
+            "community/add_feature_diff_views",
+            "community/add_feature_diff_views_bridge",
+            "community/add_feature_files_quick_open",
+            "community/add_feature_files_quick_open_bridge",
+            "community/add_feature_files_quick_open_worker",
+            "community/add_feature_panel_tabs",
+            "community/add_feature_panel_tabs_bridge",
+            "community/add_feature_window_controls",
+        ],
+    },
+    {
         "id": "claude-6.6395",
         "minimum_claude": "6.6395.0",
         "commit": "adc0509f90a37427911a0de2cafb61ca62d39804",
@@ -625,10 +659,23 @@ def patch_headers(path):
     return target
 
 
+def apply_overlays(generation, repository, source):
+    root = source.resolve()
+    for overlay in generation.get("overlays", []):
+        for relative in overlay["paths"]:
+            target = (source / relative).resolve()
+            if not str(target).startswith(str(root) + os.sep) or not target.is_file():
+                raise RuntimeError(f"Overlay path {relative} for {generation['id']} is not an existing source file")
+            content = subprocess.check_output(["git", "-C", str(repository), "show", f"{overlay['commit']}:{relative}"])
+            target.write_bytes(content)
+            log("INFO", f"Overlaid {relative} from {overlay['commit'][:12]} onto {generation['id']} ({len(content)} bytes).")
+
+
 def build_generation(generation, repository, workspace, staging):
     started = datetime.datetime.now()
     name = f"claude-desktop-extra-{generation['id']}"
     source = extract_source(repository, generation["commit"], workspace, name)
+    apply_overlays(generation, repository, source)
     generation["adapt"](source)
     compile_patches(source, generation["patches"])
     root = pathlib.PurePosixPath("generations") / generation["id"]
