@@ -6,6 +6,17 @@
     <description>Most recent updates to Barracks</description>
     <language>en</language>
     <item>
+      <title>0.1.4</title>
+      <pubDate>Sat, 21 Nov 2026 14:08:44 +0000</pubDate>
+      <sparkle:version>202611212304</sparkle:version>
+      <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">- chore(release): bump version to 0.1.4
+- fix(extra): support Claude 6.28899 with its own patch set</description>
+      <sparkle:fullReleaseNotesLink>https://github.com/ssut/Barracks/releases</sparkle:fullReleaseNotesLink>
+      <enclosure url="https://github.com/ssut/Barracks/releases/download/v0.1.4/Barracks-0.1.4.dmg" length="8136765" type="application/octet-stream" sparkle:edSignature="47V1ndj1qDrqaWP9uHspXRIi/Qfcp+3JPFKY+kuZJxxq/Ulo/ZZyAcDi5L6/TH+Flq0sFWjC+RqK709U0217Dg==" />
+    </item>
+    <item>
       <title>0.1.3</title>
       <pubDate>Wed, 18 Nov 2026 13:51:38 +0000</pubDate>
       <sparkle:version>202611182245</sparkle:version>
